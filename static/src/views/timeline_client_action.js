@@ -26,6 +26,23 @@ export const LITHUANIAN_MONTHS = [
     "Gruodis",
 ];
 
+export const LITHUANIAN_MONTHS_SHORT = [
+    "Sau",
+    "Vas",
+    "Kov",
+    "Bal",
+    "Geg",
+    "Bir",
+    "Lie",
+    "Rgp",
+    "Rgs",
+    "Spa",
+    "Lap",
+    "Gru",
+];
+
+export const ZOOM_STEPS = [10, 15, 20, 25, 35, 50, 75, 100, 125, 150, 175, 200, 250];
+
 export const LITHUANIAN_MONTHS_GENITIVE = [
     "sausio",
     "vasario",
@@ -337,6 +354,10 @@ export class AllInOneTimelineAction extends Component {
                 this.ganttElement.el.removeEventListener("click", this.onGridClickHandler);
                 this.onGridClickHandler = null;
             }
+            if (this.onWheelHandler && this.ganttElement.el) {
+                this.ganttElement.el.removeEventListener("wheel", this.onWheelHandler);
+                this.onWheelHandler = null;
+            }
             if (this.gantt) {
                 if (this.eventIds && this.eventIds.length) {
                     for (const id of this.eventIds) {
@@ -613,6 +634,12 @@ export class AllInOneTimelineAction extends Component {
 
         // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header
         g.templates.scale_cell_class = (date) => {
+            const isMacroTimeline = (this.state.currentScale === "year" && this.state.zoomLevel < 65) ||
+                                   (this.state.currentScale === "month" && this.state.zoomLevel < 40);
+            if (isMacroTimeline) {
+                return "";
+            }
+
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const d = new Date(date);
@@ -645,6 +672,25 @@ export class AllInOneTimelineAction extends Component {
             today.setHours(0, 0, 0, 0);
             const d = new Date(date);
             d.setHours(0, 0, 0, 0);
+
+            const isMacroTimeline = (this.state.currentScale === "year" && this.state.zoomLevel < 65) ||
+                                   (this.state.currentScale === "month" && this.state.zoomLevel < 40);
+            if (isMacroTimeline) {
+                // In week or month zoom mode, check if today is inside this cell interval
+                if (this.state.currentScale === "year" && this.state.zoomLevel < 35) {
+                    // Month columns
+                    if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth()) {
+                        return "today_cell";
+                    }
+                } else {
+                    // Week columns (7 days)
+                    const endWeek = new Date(d.getTime() + 7 * 86400000);
+                    if (today >= d && today < endWeek) {
+                        return "today_cell";
+                    }
+                }
+                return "";
+            }
 
             const isToday = (
                 d.getFullYear() === today.getFullYear() &&
@@ -1206,6 +1252,21 @@ export class AllInOneTimelineAction extends Component {
             };
             this.ganttElement.el.addEventListener("click", this.onGridClickHandler);
             this.ganttElement.el.addEventListener("mousedown", () => this.hideTooltip());
+
+            if (this.onWheelHandler) {
+                this.ganttElement.el.removeEventListener("wheel", this.onWheelHandler);
+            }
+            this.onWheelHandler = (e) => {
+                if (e.ctrlKey) {
+                    e.preventDefault();
+                    if (e.deltaY < 0) {
+                        this.zoomIn();
+                    } else if (e.deltaY > 0) {
+                        this.zoomOut();
+                    }
+                }
+            };
+            this.ganttElement.el.addEventListener("wheel", this.onWheelHandler, { passive: false });
         }
 
         // Initialize inside container
@@ -1308,98 +1369,175 @@ export class AllInOneTimelineAction extends Component {
                 break;
 
             case "year":
-                // Year timeline:
-                // 1. Metai (%Y m.)
-                // 2. Mėnuo lietuviškai su numeriu: pvz. Spalis (10)
-                // 3. Savaičių numeriai: S40, S41...
-                // 4. Dienos: 1, 2, 3... su aiškiai pažymėtais savaitgaliais ir valstybinėmis šventėmis
-                g.config.scales = [
-                    { unit: "year", step: 1, format: "%Y m." },
-                    {
-                        unit: "month",
-                        step: 1,
-                        format: (date) => {
-                            const monthNum = date.getMonth() + 1;
-                            const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                            return `${monthName} (${monthNum})`;
+                if (this.state.zoomLevel < 35) {
+                    // Extreme Multi-Year Zoom Out (< 35%): Base unit is MONTH!
+                    // Fits 1 to 5+ years completely on screen without horizontal scrolling
+                    g.config.scales = [
+                        { unit: "year", step: 1, format: "%Y m." },
+                        {
+                            unit: "month",
+                            step: 3,
+                            format: (date) => {
+                                const q = Math.floor(date.getMonth() / 3) + 1;
+                                return `${q} ketv.`;
+                            },
                         },
-                    },
-                    {
-                        unit: "week",
-                        step: 1,
-                        format: (date) => {
-                            const weekNum = getISOWeekNumber(date);
-                            return `S${weekNum}`;
+                        {
+                            unit: "month",
+                            step: 1,
+                            format: (date) => {
+                                return LITHUANIAN_MONTHS_SHORT[date.getMonth()];
+                            },
                         },
-                    },
-                    {
-                        unit: "day",
-                        step: 1,
-                        format: (date) => {
-                            const d = date.getDate();
-                            const hol = getLithuanianHoliday(date);
-                            if (hol) {
-                                return `<span class="holiday_day_cell" title="${hol}">★${d}</span>`;
-                            }
-                            return d;
+                    ];
+                    g.config.scale_height = 70;
+                    g.config.min_column_width = customColWidth
+                        ? Math.max(12, customColWidth)
+                        : Math.max(14, Math.round((110 * this.state.zoomLevel) / 100));
+                } else if (this.state.zoomLevel < 65) {
+                    // 6-Month to 1-Year Zoom Out (35% - 64%): Base unit is WEEK!
+                    // Fits 6 months to 1-2 years completely on screen
+                    g.config.scales = [
+                        { unit: "year", step: 1, format: "%Y m." },
+                        {
+                            unit: "month",
+                            step: 1,
+                            format: (date) => {
+                                const monthNum = date.getMonth() + 1;
+                                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                                return `${monthName} (${monthNum})`;
+                            },
                         },
-                        css: (date) => {
-                            if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                            if (isWeekend(date)) return "weekend_scale_cell";
-                            return "";
+                        {
+                            unit: "week",
+                            step: 1,
+                            format: (date) => {
+                                const weekNum = getISOWeekNumber(date);
+                                return `S${weekNum}`;
+                            },
                         },
-                    },
-                ];
-                g.config.scale_height = 92;
-                g.config.min_column_width = customColWidth ? Math.max(12, customColWidth) : Math.max(22, Math.round((24 * this.state.zoomLevel) / 100));
+                    ];
+                    g.config.scale_height = 75;
+                    g.config.min_column_width = customColWidth
+                        ? Math.max(14, customColWidth)
+                        : Math.max(16, Math.round((50 * this.state.zoomLevel) / 100));
+                } else {
+                    // Detailed Year View (>= 65%): Base unit is DAY!
+                    g.config.scales = [
+                        { unit: "year", step: 1, format: "%Y m." },
+                        {
+                            unit: "month",
+                            step: 1,
+                            format: (date) => {
+                                const monthNum = date.getMonth() + 1;
+                                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                                return `${monthName} (${monthNum})`;
+                            },
+                        },
+                        {
+                            unit: "week",
+                            step: 1,
+                            format: (date) => {
+                                const weekNum = getISOWeekNumber(date);
+                                return `S${weekNum}`;
+                            },
+                        },
+                        {
+                            unit: "day",
+                            step: 1,
+                            format: (date) => {
+                                const d = date.getDate();
+                                const hol = getLithuanianHoliday(date);
+                                if (hol) {
+                                    return `<span class="holiday_day_cell" title="${hol}">★${d}</span>`;
+                                }
+                                return d;
+                            },
+                            css: (date) => {
+                                if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                                if (isWeekend(date)) return "weekend_scale_cell";
+                                return "";
+                            },
+                        },
+                    ];
+                    g.config.scale_height = 92;
+                    g.config.min_column_width = customColWidth
+                        ? Math.max(16, customColWidth)
+                        : Math.max(20, Math.round((24 * this.state.zoomLevel) / 100));
+                }
                 break;
 
             case "month":
             default:
-                // Month timeline:
-                // 1. Mėnuo lietuviškai su numeriu ir metais: pvz. 2026 m. Spalis (10)
-                // 2. Savaičių numeriai: S40, S41...
-                // 3. Dienos: 01, 02... su aiškiai pažymėtais savaitgaliais ir valstybinėmis šventėmis
-                g.config.scales = [
-                    {
-                        unit: "month",
-                        step: 1,
-                        format: (date) => {
-                            const monthNum = date.getMonth() + 1;
-                            const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                            const year = date.getFullYear();
-                            return `${year} m. ${monthName} (${monthNum})`;
+                if (this.state.zoomLevel < 40) {
+                    // Zoomed-out Month View: Base unit is Week!
+                    g.config.scales = [
+                        {
+                            unit: "month",
+                            step: 1,
+                            format: (date) => {
+                                const monthNum = date.getMonth() + 1;
+                                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                                const year = date.getFullYear();
+                                return `${year} m. ${monthName} (${monthNum})`;
+                            },
                         },
-                    },
-                    {
-                        unit: "week",
-                        step: 1,
-                        format: (date) => {
-                            const weekNum = getISOWeekNumber(date);
-                            return `S${weekNum}`;
+                        {
+                            unit: "week",
+                            step: 1,
+                            format: (date) => {
+                                const weekNum = getISOWeekNumber(date);
+                                return `S${weekNum}`;
+                            },
                         },
-                    },
-                    {
-                        unit: "day",
-                        step: 1,
-                        format: (date) => {
-                            const d = date.getDate();
-                            const dStr = d < 10 ? `0${d}` : `${d}`;
-                            const hol = getLithuanianHoliday(date);
-                            if (hol) {
-                                return `<span class="holiday_day_cell" title="${hol}">★ ${dStr}</span>`;
-                            }
-                            return dStr;
+                    ];
+                    g.config.scale_height = 65;
+                    g.config.min_column_width = customColWidth
+                        ? Math.max(16, customColWidth)
+                        : Math.max(20, Math.round((50 * this.state.zoomLevel) / 100));
+                } else {
+                    // Standard Month View: Base unit is Day!
+                    g.config.scales = [
+                        {
+                            unit: "month",
+                            step: 1,
+                            format: (date) => {
+                                const monthNum = date.getMonth() + 1;
+                                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                                const year = date.getFullYear();
+                                return `${year} m. ${monthName} (${monthNum})`;
+                            },
                         },
-                        css: (date) => {
-                            if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                            if (isWeekend(date)) return "weekend_scale_cell";
-                            return "";
+                        {
+                            unit: "week",
+                            step: 1,
+                            format: (date) => {
+                                const weekNum = getISOWeekNumber(date);
+                                return `S${weekNum}`;
+                            },
                         },
-                    },
-                ];
-                g.config.scale_height = 80;
-                g.config.min_column_width = customColWidth ? Math.max(18, customColWidth) : Math.max(38, colWidth);
+                        {
+                            unit: "day",
+                            step: 1,
+                            format: (date) => {
+                                const d = date.getDate();
+                                const dStr = d < 10 ? `0${d}` : `${d}`;
+                                const hol = getLithuanianHoliday(date);
+                                if (hol) {
+                                    return `<span class="holiday_day_cell" title="${hol}">★ ${dStr}</span>`;
+                                }
+                                return dStr;
+                            },
+                            css: (date) => {
+                                if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                                if (isWeekend(date)) return "weekend_scale_cell";
+                                return "";
+                            },
+                        },
+                    ];
+                    g.config.scale_height = 80;
+                    g.config.min_column_width = customColWidth ? Math.max(18, customColWidth) : Math.max(38, colWidth);
+                }
                 break;
         }
     }
@@ -1635,11 +1773,13 @@ export class AllInOneTimelineAction extends Component {
         let startDate, endDate;
 
         if (scale === "year") {
-            // Generous past buffer: at least 2 full calendar years before minDate
-            const startYear = Math.min(minDate.getFullYear() - 2, today.getFullYear() - 1);
+            // Buffer past & future dynamically based on zoom
+            const isExtremeZoom = this.state.zoomLevel < 35;
+            const pastYears = isExtremeZoom ? 3 : 2;
+            const futureYears = isExtremeZoom ? 4 : 2;
+            const startYear = Math.min(minDate.getFullYear() - pastYears, today.getFullYear() - 1);
             startDate = new Date(startYear, 0, 1, 0, 0, 0);
-            // Generous future buffer: at least 2 full calendar years after maxDate
-            const endYear = Math.max(maxDate.getFullYear() + 2, today.getFullYear() + 2);
+            const endYear = Math.max(maxDate.getFullYear() + futureYears, today.getFullYear() + 2);
             endDate = new Date(endYear, 11, 31, 23, 59, 59);
         } else if (scale === "month") {
             // Buffer past: at least 12 months before minDate
@@ -1684,7 +1824,8 @@ export class AllInOneTimelineAction extends Component {
             const scale = this.state.currentScale;
 
             if (scale === "year") {
-                newStart.setFullYear(newStart.getFullYear() - 1);
+                const stepYears = this.state.zoomLevel < 35 ? 2 : 1;
+                newStart.setFullYear(newStart.getFullYear() - stepYears);
             } else if (scale === "month") {
                 newStart.setMonth(newStart.getMonth() - 6);
             } else if (scale === "week") {
@@ -1721,7 +1862,8 @@ export class AllInOneTimelineAction extends Component {
             const scale = this.state.currentScale;
 
             if (scale === "year") {
-                newEnd.setFullYear(newEnd.getFullYear() + 1);
+                const stepYears = this.state.zoomLevel < 35 ? 2 : 1;
+                newEnd.setFullYear(newEnd.getFullYear() + stepYears);
             } else if (scale === "month") {
                 newEnd.setMonth(newEnd.getMonth() + 6);
             } else if (scale === "week") {
@@ -1843,17 +1985,17 @@ export class AllInOneTimelineAction extends Component {
     }
 
     zoomIn() {
-        this.state.zoomLevel = Math.min(250, this.state.zoomLevel + 25);
-        this.applyScaleConfig(this.state.currentScale);
-        if (this.gantt) {
-            this.ensureTimelineRange();
-            this.gantt.render();
-            this.renderTodayMarker();
-        }
+        const nextStep = ZOOM_STEPS.find((step) => step > this.state.zoomLevel);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[ZOOM_STEPS.length - 1]);
     }
 
     zoomOut() {
-        this.state.zoomLevel = Math.max(50, this.state.zoomLevel - 25);
+        const nextStep = [...ZOOM_STEPS].reverse().find((step) => step < this.state.zoomLevel);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0]);
+    }
+
+    setZoom(level) {
+        this.state.zoomLevel = level;
         this.applyScaleConfig(this.state.currentScale);
         if (this.gantt) {
             this.ensureTimelineRange();
@@ -1988,37 +2130,67 @@ export class AllInOneTimelineAction extends Component {
         const durationDays = Math.max(1, Math.round((maxEnd.getTime() - minStart.getTime()) / 86400000));
 
         let targetScale = "year";
+        let targetZoom = 100;
         let rangeStart = new Date(minStart);
         let rangeEnd = new Date(maxEnd);
-        let totalUnits = durationDays;
         let colWidth = 40;
 
-        if (durationDays <= 3) {
-            // Very short task (1-3 days): switch to week view
+        if (durationDays <= 5) {
+            // Very short task (1-5 days): switch to week view
             targetScale = "week";
+            targetZoom = 100;
             rangeStart.setDate(rangeStart.getDate() - 2);
-            rangeEnd.setDate(rangeEnd.getDate() + 4);
-            totalUnits = Math.max(7, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
+            rangeEnd.setDate(rangeEnd.getDate() + 3);
+            const totalUnits = Math.max(7, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
             colWidth = Math.max(48, Math.floor(usableWidth / totalUnits));
-        } else if (durationDays <= 35) {
-            // Medium task or milestone (4 to 35 days): switch to month view
+        } else if (durationDays <= 45) {
+            // Medium task or milestone (up to 45 days): switch to month view
             targetScale = "month";
+            targetZoom = 100;
             rangeStart.setDate(rangeStart.getDate() - 3);
             rangeEnd.setDate(rangeEnd.getDate() + 4);
-            totalUnits = Math.max(14, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
-            colWidth = Math.max(28, Math.floor(usableWidth / totalUnits));
-        } else {
-            // Project or long duration (> 35 days): switch to year view
+            const totalUnits = Math.max(14, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
+            colWidth = Math.max(24, Math.floor(usableWidth / totalUnits));
+        } else if (durationDays <= 85) {
+            // 2-3 months: year view with detailed days
             targetScale = "year";
+            targetZoom = 75;
+            rangeStart.setDate(rangeStart.getDate() - 5);
+            rangeEnd.setDate(rangeEnd.getDate() + 7);
+            const totalUnits = Math.max(30, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
+            colWidth = Math.max(18, Math.floor(usableWidth / totalUnits));
+        } else if (durationDays <= 270) {
+            // 3 to 9 months (specifically 6 months): year view with WEEKS columns
+            targetScale = "year";
+            targetZoom = 45;
             rangeStart.setDate(rangeStart.getDate() - 7);
-            rangeEnd.setDate(rangeEnd.getDate() + 10);
-            totalUnits = Math.max(30, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
-            colWidth = Math.max(14, Math.floor(usableWidth / totalUnits));
+            const startDay = rangeStart.getDay();
+            const startOffset = (startDay === 0 ? -6 : 1) - startDay;
+            rangeStart.setDate(rangeStart.getDate() + startOffset);
+            rangeStart.setHours(0, 0, 0, 0);
+
+            rangeEnd.setDate(rangeEnd.getDate() + 14);
+            const endDay = rangeEnd.getDay();
+            const endOffset = (endDay === 0 ? 0 : 7 - endDay);
+            rangeEnd.setDate(rangeEnd.getDate() + endOffset);
+            rangeEnd.setHours(23, 59, 59, 999);
+
+            const totalWeeks = Math.max(4, Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (7 * 86400000)));
+            colWidth = Math.max(18, Math.floor(usableWidth / totalWeeks));
+        } else {
+            // Long project (1 year, 2 years, 5+ years): year view with MONTHS columns
+            targetScale = "year";
+            targetZoom = durationDays > 730 ? 15 : 25;
+            rangeStart = new Date(rangeStart.getFullYear(), rangeStart.getMonth() - 1, 1, 0, 0, 0);
+            rangeEnd = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() + 2, 0, 23, 59, 59);
+
+            const totalMonths = Math.max(6, (rangeEnd.getFullYear() - rangeStart.getFullYear()) * 12 + (rangeEnd.getMonth() - rangeStart.getMonth()) + 1);
+            colWidth = Math.max(16, Math.floor(usableWidth / totalMonths));
         }
 
         // Apply scale & date boundaries
         this.state.currentScale = targetScale;
-        this.state.zoomLevel = 100;
+        this.state.zoomLevel = targetZoom;
         g.config.start_date = rangeStart;
         g.config.end_date = rangeEnd;
         this.applyScaleConfig(targetScale, colWidth);

@@ -46,7 +46,21 @@
                                 <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomOut" title="Mažinti / Zoom Out">
                                     <i class="fa fa-search-minus"/>
                                 </button>
-                                <span class="input-group-text py-0 px-2 small bg-light" t-esc="state.zoomLevel + '%'"/>
+                                <div class="dropdown d-inline-block">
+                                    <button class="btn btn-outline-secondary btn_timeline dropdown-toggle py-0 px-2 small bg-light" type="button" data-bs-toggle="dropdown" title="Pasirinkti mastelį">
+                                        <span t-esc="state.zoomLevel + '%'"/>
+                                    </button>
+                                    <ul class="dropdown-menu shadow">
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(10)">10% – Ekstremalus (Keli metai)</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(20)">20% – Keli metai (2–5 m.)</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(35)">35% – Metai (1–2 m.)</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(50)">50% – Pusmetis (6 mėn.)</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(75)">75% – Išsamūs metai</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(100)">100% – Normalus mastelis</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(150)">150% – Padidintas</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(200)">200% – Maksimalus</a></li>
+                                    </ul>
+                                </div>
                             </div>
                         </div>
 
