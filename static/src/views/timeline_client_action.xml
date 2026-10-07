@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="all_in_one_timeline.AllInOneTimelineView">
+        <div class="o_timeline_view h-100 d-flex flex-column o_all_in_one_timeline_action" t-ref="root">
+            <Layout display="display" className="'h-100 d-flex flex-column'">
+                <t t-set-slot="control-panel-additional-actions">
+                    <CogMenu t-if="env.searchModel"/>
+                </t>
+                <t t-set-slot="layout-actions">
+                    <SearchBar t-if="env.searchModel and searchBarToggler and searchBarToggler.state.showSearchBar" toggler="searchBarToggler"/>
+                </t>
+                <t t-set-slot="control-panel-navigation-additional">
+                    <t t-if="env.searchModel and searchBarToggler" t-component="searchBarToggler.component" t-props="searchBarToggler.props"/>
+                </t>
+
+                <div class="all_in_one_timeline_container">
+                    <!-- Top Toolbar -->
+                    <div class="timeline_toolbar">
+                        <div class="toolbar_left">
+                            <!-- Project Filter Dropdown -->
+                            <select class="form-select form-select-sm project_select" style="width: 180px;" t-model="state.selectedProjectId" t-on-change="onProjectChange">
+                                <option value="0">Visi projektai</option>
+                                <t t-foreach="state.projects" t-as="p" t-key="p.id">
+                                    <option t-att-value="p.id" t-esc="p.name"/>
+                                </t>
+                            </select>
+
+                            <!-- Navigation Group -->
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigatePrevious" title="Atgal / Previous">
+                                    <i class="fa fa-chevron-left"/>
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateToday" title="Šiandien / Jump to Today">
+                                    Šiandien
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateNext" title="Pirmyn / Next">
+                                    <i class="fa fa-chevron-right"/>
+                                </button>
+                            </div>
+
+                            <!-- Zoom Controls -->
+                            <div class="btn-group btn-group-sm ms-1">
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomIn" title="Didinti / Zoom In">
+                                    <i class="fa fa-search-plus"/>
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomOut" title="Mažinti / Zoom Out">
+                                    <i class="fa fa-search-minus"/>
+                                </button>
+                                <span class="input-group-text py-0 px-2 small bg-light" t-esc="state.zoomLevel + '%'"/>
+                            </div>
+                        </div>
+
+                        <div class="toolbar_right">
+                            <!-- Hierarchy Collapse/Expand & Fit to Screen -->
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-secondary btn_timeline" t-att-disabled="!canUndo" t-on-click="undoAction" title="Atšaukti paskutinį veiksmą (Ctrl+Z) / Undo">
+                                    <i class="fa fa-undo me-1"/> Atšaukti
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="expandAll" title="Išskleisti viską">
+                                    <i class="fa fa-expand me-1"/> Išskleisti
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="collapseAll" title="Suskleisti viską">
+                                    <i class="fa fa-compress me-1"/> Suskleisti
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="fitToScreen" title="Pritaikyti pasirinktą užduotį arba visą tvarkaraštį ekrane (Fit to screen)">
+                                    <i class="fa fa-arrows-alt me-1"/> Pritaikyti ekrane
+                                </button>
+                            </div>
+
+                            <!-- Timeframe Scales (Diena, Savaitė, Mėnuo, Metai) -->
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-secondary btn_timeline" t-att-class="{ 'btn_active': state.currentScale === 'day' }" t-on-click="() => this.changeScale('day')">
+                                    Diena
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-att-class="{ 'btn_active': state.currentScale === 'week' }" t-on-click="() => this.changeScale('week')">
+                                    Savaitė
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-att-class="{ 'btn_active': state.currentScale === 'month' }" t-on-click="() => this.changeScale('month')">
+                                    Mėnuo
+                                </button>
+                                <button class="btn btn-outline-secondary btn_timeline" t-att-class="{ 'btn_active': state.currentScale === 'year' }" t-on-click="() => this.changeScale('year')">
+                                    Metai
+                                </button>
+                            </div>
+
+                            <!-- Export Dropdown -->
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle btn_timeline" type="button" data-bs-toggle="dropdown">
+                                    <i class="fa fa-download me-1"/> Eksportuoti
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow">
+                                    <li><a class="dropdown-item" href="#" t-on-click.prevent="exportToPDF"><i class="fa fa-file-pdf-o text-danger me-2"/>Eksportuoti į PDF</a></li>
+                                    <li><a class="dropdown-item" href="#" t-on-click.prevent="exportToPNG"><i class="fa fa-file-image-o text-primary me-2"/>Eksportuoti į PNG</a></li>
+                                    <li><a class="dropdown-item" href="#" t-on-click.prevent="exportToExcel"><i class="fa fa-file-excel-o text-success me-2"/>Eksportuoti į Excel</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Main Area -->
+                    <div class="timeline_main_area">
+                        <!-- Gantt Canvas Container -->
+                        <div class="gantt_canvas_box" t-ref="ganttElement"/>
+                    </div>
+                </div>
+            </Layout>
+        </div>
+    </t>
+</templates>

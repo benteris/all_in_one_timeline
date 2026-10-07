@@ -1,0 +1,624 @@
+/* All In One Timeline - Standard Odoo Community Theme (#71639e) & UI */
+
+.o_all_in_one_timeline_action {
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+
+    .o_content {
+        flex: 1 1 auto !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        overflow: hidden !important;
+        padding: 0 !important;
+    }
+}
+
+.all_in_one_timeline_container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    background-color: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden;
+
+    /* Top Toolbar */
+    .timeline_toolbar {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 16px;
+        background: #f8f9fa;
+        border-bottom: 1px solid #dee2e6;
+        gap: 8px;
+        flex-wrap: wrap;
+
+        .toolbar_left, .toolbar_right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+
+
+        .project_select {
+            border-color: #ced4da;
+            font-size: 12px;
+            &:focus {
+                border-color: #71639e;
+                box-shadow: 0 0 0 0.2rem rgba(113, 99, 158, 0.25);
+            }
+        }
+
+        .btn_timeline {
+            border-radius: 4px;
+            font-size: 12px;
+            padding: 5px 10px;
+            font-weight: 500;
+            border: 1px solid #ced4da;
+            background-color: #ffffff;
+            color: #495057;
+            transition: all 0.15s ease;
+
+            &:hover {
+                background-color: #e9ecef;
+                border-color: #adb5bd;
+                color: #212529;
+            }
+
+            &:disabled, &[disabled] {
+                opacity: 0.55;
+                cursor: not-allowed !important;
+                pointer-events: none;
+                background-color: #f8f9fa !important;
+                color: #adb5bd !important;
+                border-color: #dee2e6 !important;
+            }
+
+            &.btn_active {
+                background-color: #71639e !important;
+                border-color: #71639e !important;
+                color: #ffffff !important;
+                box-shadow: 0 1px 3px rgba(113, 99, 158, 0.3);
+            }
+        }
+    }
+
+    /* Main Chart Area */
+    .timeline_main_area {
+        flex: 1 1 0;
+        min-height: 0;
+        height: 100%;
+        display: flex;
+        position: relative;
+        overflow: hidden;
+        width: 100%;
+
+        .gantt_canvas_box {
+            flex: 1 1 0;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+    }
+
+    /* Gantt Scales (Headers) */
+    .gantt_grid_scale, .gantt_task_scale {
+        background-color: #f8f9fa !important;
+        border-bottom: 2px solid #dee2e6 !important;
+        color: #495057 !important;
+        font-weight: 600;
+    }
+
+    .gantt_scale_line {
+        border-bottom: 1px solid #dee2e6 !important;
+        box-sizing: border-box;
+
+        &:last-child {
+            border-bottom: none !important;
+        }
+    }
+
+    .gantt_scale_cell {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        color: #495057 !important;
+        border-right: 1px solid #dee2e6 !important;
+        box-sizing: border-box !important;
+        text-align: center;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0 3px;
+
+        &.weekend_scale_cell {
+            background-color: #dbe0e8 !important; // High contrast grey-silver header for Saturday & Sunday
+            color: #1e293b !important;
+            font-weight: 700 !important;
+        }
+
+        &.holiday_scale_cell {
+            background-color: #ffcfcb !important; // Distinct festive light red header for Lithuanian holidays
+            color: #b01a29 !important;
+            font-weight: 700 !important;
+            border-bottom: 2px solid #dc3545 !important;
+        }
+
+        &.today_scale_cell {
+            background-color: #71639e !important;
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+
+        .holiday_day_cell {
+            color: #c82333;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            cursor: help;
+        }
+    }
+
+    .gantt_grid_scale {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+    }
+
+    .gantt_grid_head_cell {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        color: #495057 !important;
+        border-right: 1px solid #dee2e6 !important;
+        background-color: #f8f9fa !important;
+        padding: 0 8px !important;
+        box-sizing: border-box !important;
+        vertical-align: top !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+
+        &:first-child {
+            justify-content: flex-start !important;
+            padding-left: 12px !important;
+        }
+    }
+
+    /* Gantt Rows & Cells */
+    .gantt_row, .gantt_task_row {
+        height: 52px !important;
+        line-height: 52px !important;
+        border-bottom: 1px solid #e9ecef !important;
+        background-color: #ffffff;
+        transition: background-color 0.15s ease;
+
+        &.odd {
+            background-color: #fcfdfe;
+        }
+
+        &:hover {
+            background-color: #f7f6fa !important;
+        }
+
+        &.gantt_selected {
+            background-color: rgba(113, 99, 158, 0.08) !important;
+        }
+    }
+
+    .gantt_cell {
+        height: 52px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        padding: 0 10px !important;
+        box-sizing: border-box !important;
+        font-size: 13px;
+        color: #212529;
+        border-right: 1px solid #f1f3f5 !important;
+    }
+
+    /* Distinct Shading for Weekends (#eaedf2) and Lithuanian Holidays (#ffe6e4) */
+    .gantt_task_cell {
+        border-right: 1px solid #e9ecef !important;
+        box-sizing: border-box;
+
+        &.weekend_cell {
+            background-color: #eaedf2 !important; // Clearly visible shaded background for weekend days
+            border-left: 1px solid #d8dde5 !important;
+            border-right: 1px solid #d8dde5 !important;
+        }
+
+        &.holiday_cell {
+            background-color: #ffe6e4 !important; // Distinct soft red background for Lithuanian national holidays
+            border-left: 1px dashed #e65c5c !important;
+            border-right: 1px dashed #e65c5c !important;
+        }
+
+        &.today_cell {
+            background-color: rgba(113, 99, 158, 0.08) !important;
+            border-left: 2px solid #dc3545 !important;
+        }
+    }
+
+    /* Dynamic Today Marker Line */
+    .custom_today_marker {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background-color: #dc3545;
+        z-index: 10;
+        pointer-events: none;
+        box-shadow: 0 0 6px rgba(220, 53, 69, 0.6);
+
+        .today_marker_label {
+            position: absolute;
+            top: 2px;
+            left: 3px;
+            background-color: #dc3545;
+            color: #ffffff;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 3px;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+    }
+
+    /* Task Bars in Timeline (Odoo Community Purple #71639e & Green for Done) */
+    .gantt_task_line {
+        height: 34px !important;
+        line-height: 34px !important;
+        border-radius: 6px !important;
+        border: 1px solid #5f5285 !important;
+        background-color: #71639e !important;
+        color: #ffffff !important;
+        box-shadow: 0 2px 4px rgba(113, 99, 158, 0.25) !important;
+        font-size: 12px;
+        font-weight: 600;
+
+        .gantt_task_content {
+            padding: 0 8px !important;
+            line-height: 34px !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            height: 100%;
+            display: flex;
+            align-items: center;
+        }
+
+        .bar_content_wrapper {
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+
+            .bar_text {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                font-weight: 600;
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+
+            .bar_prog_badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 10px;
+                font-weight: 700;
+                padding: 1px 5px;
+                border-radius: 4px;
+                background-color: rgba(0, 0, 0, 0.28);
+                color: #ffffff;
+                border: 1px solid rgba(255, 255, 255, 0.35);
+                line-height: 14px;
+                flex: 0 0 auto;
+
+                &.bar_prog_100 {
+                    background-color: rgba(255, 255, 255, 0.25);
+                    border-color: rgba(255, 255, 255, 0.7);
+                }
+            }
+        }
+
+        .gantt_task_progress {
+            background-color: rgba(0, 0, 0, 0.22) !important;
+            border-right: 2px solid rgba(255, 255, 255, 0.85);
+            border-radius: 5px 0 0 5px;
+            box-sizing: border-box;
+        }
+
+        .gantt_task_drag {
+            z-index: 5 !important;
+            cursor: col-resize !important;
+            opacity: 0.6;
+            transition: opacity 0.15s ease;
+
+            &:hover {
+                opacity: 1;
+            }
+        }
+
+        &.gantt_project {
+            background-color: #5f5285 !important;
+            border-color: #4a3e6a !important;
+            box-shadow: 0 2px 4px rgba(95, 82, 133, 0.25) !important;
+        }
+
+        /* Milestones (Warm Amber / Gold #f59e0b, Green when reached) - 100% STRAIGHT BARS */
+        &.timeline_milestone_bar, &.gantt_milestone {
+            height: 34px !important;
+            line-height: 34px !important;
+            border-radius: 6px !important;
+            background-color: #f59e0b !important;
+            border: 1px solid #d97706 !important;
+            box-shadow: 0 2px 4px rgba(245, 158, 11, 0.25) !important;
+            visibility: visible !important;
+            transform: none !important;
+
+            .gantt_task_content {
+                transform: none !important;
+                -webkit-transform: none !important;
+                padding: 0 8px !important;
+                line-height: 34px !important;
+                color: #ffffff !important;
+                font-weight: 700 !important;
+                background: transparent !important;
+                border: none !important;
+                box-sizing: border-box !important;
+                display: flex !important;
+                align-items: center;
+            }
+
+            .gantt_task_progress {
+                background-color: rgba(0, 0, 0, 0.22) !important;
+                border-right: 2px solid rgba(255, 255, 255, 0.85);
+                border-radius: 5px 0 0 5px;
+            }
+
+            &.milestone_done {
+                background-color: #28a745 !important;
+                border-color: #1e7e34 !important;
+                box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3) !important;
+
+                .gantt_task_progress {
+                    background-color: rgba(0, 0, 0, 0.12) !important;
+                    border-right: none;
+                }
+            }
+        }
+
+        /* GREEN FOR DONE TASKS AND ENTIRE DONE PROJECTS */
+        &.task_done, &.project_done {
+            background-color: #28a745 !important;
+            border-color: #1e7e34 !important;
+            box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3) !important;
+
+            .gantt_task_progress {
+                background-color: rgba(0, 0, 0, 0.12) !important;
+                border-right: none;
+            }
+        }
+    }
+
+    /* Links & Arrows */
+    .gantt_line_wrapper {
+        .gantt_link_line {
+            background-color: #adb5bd !important;
+        }
+        .gantt_link_arrow {
+            border-left-color: #adb5bd !important;
+        }
+    }
+
+    /* Left Grid Custom Columns */
+    .assignee_cell {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+
+        .mini_avatar {
+            width: 26px;
+            height: 26px;
+            min-width: 26px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 1.5px solid #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+        }
+
+        .assignee_name {
+            font-size: 12px;
+            color: #212529;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+
+    .progress_cell {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+
+        .progress_bar_box {
+            flex: 1;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+
+            .progress_bar_fill {
+                height: 100%;
+                background: #28a745;
+                border-radius: 4px;
+                transition: width 0.2s ease;
+            }
+        }
+
+        .progress_text {
+            font-size: 11px;
+            font-weight: 700;
+            color: #495057;
+            min-width: 32px;
+            text-align: right;
+        }
+    }
+
+    .grid_action_btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 3px;
+        cursor: pointer;
+        color: #6c757d;
+        font-size: 12px;
+        transition: all 0.15s ease;
+
+        &:hover {
+            background-color: rgba(113, 99, 158, 0.1);
+            color: #71639e;
+        }
+
+        &[data-action="add_subtask"], &[data-action="add_task_to_project"], &[data-action="add_task_to_milestone"] {
+            color: #71639e;
+            font-weight: bold;
+            &:hover {
+                background-color: #71639e;
+                color: #ffffff;
+            }
+        }
+
+        &[data-action="add_milestone_to_project"] {
+            color: #d97706;
+            font-weight: bold;
+            &:hover {
+                background-color: #f59e0b;
+                color: #ffffff;
+            }
+        }
+
+        &.text-danger:hover {
+            background-color: #fee2e2;
+            color: #dc3545 !important;
+        }
+    }
+}
+
+/* Rich Tooltip (White card with clean Odoo styling) */
+div.gantt_tooltip {
+    background: #ffffff !important;
+    color: #212529 !important;
+    border: 1px solid #ced4da !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+    padding: 12px 16px !important;
+    font-size: 12px !important;
+    line-height: 1.5 !important;
+    max-width: 300px !important;
+    z-index: 99999 !important;
+    pointer-events: none !important;
+    user-select: none !important;
+
+    .tooltip_title {
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        color: #71639e !important;
+        margin-bottom: 8px !important;
+        border-bottom: 1px solid #e9ecef !important;
+        padding-bottom: 6px !important;
+    }
+
+    .tooltip_row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 4px;
+
+        .tooltip_label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .tooltip_val {
+            font-weight: 600;
+            color: #212529;
+        }
+    }
+
+    .tooltip_progress_bar {
+        width: 100%;
+        height: 6px;
+        background: #e9ecef;
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 8px;
+
+        .tooltip_progress_fill {
+            height: 100%;
+            background: #28a745;
+        }
+    }
+}
+
+/* Global reset for DHTMLX milestone rotation - ensure all bars are 100% straight and horizontal */
+.gantt_task_line.gantt_milestone,
+.gantt_task_line.timeline_milestone_bar,
+.gantt_milestone {
+    visibility: visible !important;
+    transform: none !important;
+    -webkit-transform: none !important;
+
+    div {
+        visibility: visible !important;
+    }
+
+    .gantt_task_content {
+        transform: none !important;
+        -webkit-transform: none !important;
+        border: none !important;
+        background: transparent !important;
+        display: block !important;
+    }
+}
+
+/* Magnetic Snap Guideline (Vertical guideline shown when dragging or resizing near another task boundary) */
+.gantt_magnetic_snap_line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: #28a745;
+    box-shadow: 0 0 8px rgba(40, 167, 69, 0.9);
+    z-index: 9999;
+    pointer-events: none;
+    height: 100%;
+}
+

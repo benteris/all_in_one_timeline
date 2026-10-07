@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Client Action for All In One Timeline (Invoked from Timeline View, Kanban cards & Project Form) -->
+    <record id="action_all_in_one_timeline" model="ir.actions.client">
+        <field name="name">All In One Timeline</field>
+        <field name="tag">all_in_one_timeline.action</field>
+        <field name="target">current</field>
+    </record>
+</odoo>
