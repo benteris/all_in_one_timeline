@@ -41,7 +41,7 @@ export const LITHUANIAN_MONTHS_SHORT = [
     "Gru",
 ];
 
-export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200];
+export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250];
 
 export const LITHUANIAN_MONTHS_GENITIVE = [
     "sausio",
@@ -633,10 +633,12 @@ export class AllInOneTimelineAction extends Component {
             return "task_standard";
         };
 
-        // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header
-        g.templates.scale_cell_class = (date) => {
-            const isMacroTimeline = this.state.zoomLevel < 65;
-            if (isMacroTimeline) {
+        // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header (strictly for day units only)
+        g.templates.scale_cell_class = (date, scale) => {
+            if (scale && scale.unit !== "day") {
+                return "";
+            }
+            if (this.state.zoomLevel < 50) {
                 return "";
             }
 
@@ -1369,11 +1371,13 @@ export class AllInOneTimelineAction extends Component {
      */
     /**
      * Unified timescale configuration driven purely by zoomLevel.
-     * 10%-15%: Years & Quarters (numbers 1..4)
-     * 20%-25%: Years, Quarters (1..4) & Months as numbers (1..12)
-     * 35%: Years, Quarters (1..4), Months as numbers (1..12) & Weeks (numbers)
-     * 50%: Years, Quarters (1..4), Months with names & Weeks (numbers)
-     * >=65%: Years, Months with names, Weeks (numbers) & Days with Lithuanian holidays and weekends
+     * Consistent Top-to-Bottom hierarchy across all zoom levels:
+     * 1. Metai (Year: %Y)
+     * 2. Ketvirtis (Quarter: 1, 2, 3, 4)
+     * 3. Mėnuo (Month: with Lithuanian month name)
+     * 4. Savaitė (Week: ISO week number)
+     * 5. Diena (Day: day number, holidays, weekends) — shown when zoomLevel >= 50%.
+     * Below 50% (< 50%): Day is omitted, keeping Year -> Quarter -> Month -> Week intact so UI doesn't jump.
      */
     applyScaleConfig(customColWidth = null) {
         if (typeof customColWidth === "string") {
@@ -1382,165 +1386,113 @@ export class AllInOneTimelineAction extends Component {
         const g = this.gantt;
         if (!g) return;
 
-        if (this.state.zoomLevel <= 15) {
-            // Extreme Multi-Year Zoom Out (10% - 15%):
-            // Years, Quarters (1..4) and Months with short names (Sau, Vas, Kov...)
-            const colW = this.state.zoomLevel === 10 ? 26 : 34;
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 3,
-                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
-                },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => LITHUANIAN_MONTHS_SHORT[date.getMonth()],
-                },
-            ];
-            g.config.scale_height = 70;
-            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : colW;
-        } else if (this.state.zoomLevel < 35) {
-            // Multi-Year Zoom Out (20%):
-            // Years, Quarters (1..4) and Months with full names
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 3,
-                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
-                },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => LITHUANIAN_MONTHS[date.getMonth()],
-                },
-            ];
-            g.config.scale_height = 70;
-            g.config.min_column_width = customColWidth ? Math.max(24, customColWidth) : 48;
-        } else if (this.state.zoomLevel < 50) {
-            // Zoom Out at 35%:
-            // Years, Quarters (1..4), Months with full names, and Weeks (numbers)
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 3,
-                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
-                },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => LITHUANIAN_MONTHS[date.getMonth()],
-                },
-                {
-                    unit: "week",
-                    step: 1,
-                    format: (date) => getISOWeekNumber(date),
-                },
-            ];
-            g.config.scale_height = 88;
-            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : 22;
-        } else if (this.state.zoomLevel < 65) {
-            // 50% Zoom:
-            // Years, Quarters (1..4), Month names with number, and Weeks (numbers)
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 3,
-                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
-                },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => {
-                        const monthNum = date.getMonth() + 1;
-                        const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                        return `${monthName} (${monthNum})`;
-                    },
-                },
-                {
-                    unit: "week",
-                    step: 1,
-                    format: (date) => getISOWeekNumber(date),
-                },
-            ];
-            g.config.scale_height = 88;
-            g.config.min_column_width = customColWidth ? Math.max(20, customColWidth) : 32;
-        } else if (this.state.zoomLevel < 100) {
-            // 75% Zoom:
-            // Years, Month names, Weeks (numbers), and Days
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => {
-                        const monthNum = date.getMonth() + 1;
-                        const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                        return `${monthName} (${monthNum})`;
-                    },
-                },
-                {
-                    unit: "week",
-                    step: 1,
-                    format: (date) => getISOWeekNumber(date),
-                },
-                {
-                    unit: "day",
-                    step: 1,
-                    format: "%j",
-                    css: (date) => {
-                        if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                        if (isWeekend(date)) return "weekend_scale_cell";
-                        return "";
-                    },
-                },
-            ];
-            g.config.scale_height = 92;
-            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : 22;
+        // Reset global scale_cell_class so non-day scales (Year, Month, etc.) are never styled as holidays
+        g.templates.scale_cell_class = (date, scale) => {
+            if (!scale || scale.unit !== "day") {
+                return "";
+            }
+            const hol = getLithuanianHoliday(date);
+            if (hol) {
+                return "holiday_scale_cell";
+            } else if (isWeekend(date)) {
+                return "weekend_scale_cell";
+            }
+            return "";
+        };
+
+        const zoom = this.state.zoomLevel;
+
+        // 1. Year scale: Metai (%Y, e.g. 2026)
+        const yearScale = { unit: "year", step: 1, format: "%Y", css: () => "" };
+
+        // 2. Quarter scale: Ketvirtis (1, 2, 3, 4)
+        const quarterScale = {
+            unit: "quarter",
+            step: 1,
+            format: (date) => Math.floor(date.getMonth() / 3) + 1,
+            css: () => "",
+        };
+
+        // 3. Month scale: Mėnuo (Lithuanian month name across all scales)
+        let monthFormat;
+        if (zoom <= 15) {
+            monthFormat = (date) => LITHUANIAN_MONTHS_SHORT[date.getMonth()];
+        } else if (zoom < 50) {
+            monthFormat = (date) => LITHUANIAN_MONTHS[date.getMonth()];
         } else {
-            // Detailed View (100%, 150%, 200%): Base unit is DAY!
-            const colW = Math.max(26, Math.round((30 * this.state.zoomLevel) / 100));
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 1,
-                    format: (date) => {
-                        const monthNum = date.getMonth() + 1;
-                        const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                        return `${monthName} (${monthNum})`;
-                    },
-                },
-                {
-                    unit: "week",
-                    step: 1,
-                    format: (date) => getISOWeekNumber(date),
-                },
-                {
-                    unit: "day",
-                    step: 1,
-                    format: (date) => {
-                        const d = date.getDate();
-                        const hol = getLithuanianHoliday(date);
-                        if (hol) {
-                            return `<span class="holiday_day_cell" title="${hol}">★${d}</span>`;
-                        }
-                        return d;
-                    },
-                    css: (date) => {
-                        if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                        if (isWeekend(date)) return "weekend_scale_cell";
-                        return "";
-                    },
-                },
-            ];
-            g.config.scale_height = 92;
-            g.config.min_column_width = customColWidth ? Math.max(20, customColWidth) : colW;
+            monthFormat = (date) => {
+                const monthNum = String(date.getMonth() + 1).padStart(2, "0");
+                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                return `${monthName} (${monthNum})`;
+            };
         }
+        const monthScale = {
+            unit: "month",
+            step: 1,
+            format: monthFormat,
+            css: () => "",
+        };
+
+        // 4. Week scale: Savaitė (ISO week number: 36, 37, 38...)
+        const weekScale = {
+            unit: "week",
+            step: 1,
+            format: (date) => getISOWeekNumber(date),
+            css: () => "",
+        };
+
+        // Below 50% (< 50%): 4 rows (Year, Quarter, Month, Week). Base unit is WEEK.
+        if (zoom < 50) {
+            g.config.scales = [yearScale, quarterScale, monthScale, weekScale];
+            g.config.scale_height = 88; // 4 rows * 22px = 88px
+
+            let colW = 32;
+            if (zoom === 10) colW = 14;
+            else if (zoom === 15) colW = 18;
+            else if (zoom === 20) colW = 24;
+            else if (zoom === 35) colW = 32;
+
+            g.config.min_column_width = customColWidth ? Math.max(12, customColWidth) : colW;
+            return;
+        }
+
+        // Zoom >= 50%: 5 rows (Year, Quarter, Month, Week, Day). Base unit is DAY.
+        const dayScale = {
+            unit: "day",
+            step: 1,
+            format: (date) => {
+                const d = date.getDate();
+                if (zoom >= 100) {
+                    const hol = getLithuanianHoliday(date);
+                    if (hol) {
+                        return `<span class="holiday_day_cell" title="${hol}">★${d}</span>`;
+                    }
+                }
+                return d;
+            },
+            css: (date) => {
+                const today = new Date();
+                if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
+                    return "today_scale_cell";
+                }
+                if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                if (isWeekend(date)) return "weekend_scale_cell";
+                return "";
+            },
+        };
+
+        g.config.scales = [yearScale, quarterScale, monthScale, weekScale, dayScale];
+        g.config.scale_height = 110; // 5 rows * 22px = 110px
+
+        let colW = 32;
+        if (zoom === 50) colW = 18;
+        else if (zoom === 75) colW = 24;
+        else if (zoom === 100) colW = 32;
+        else if (zoom === 150) colW = 48;
+        else if (zoom === 200) colW = 64;
+        else if (zoom >= 250) colW = 80;
+
+        g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : colW;
     }
 
     /**
@@ -1833,21 +1785,29 @@ export class AllInOneTimelineAction extends Component {
         let endDate;
 
         if (this.state.zoomLevel <= 15) {
-            // Extreme zoom (10% - 15%): Quarters and Years
+            // Extreme zoom (10% - 15%): Multi-year buffer
+            startDate = new Date(effectiveMin.getFullYear() - 1, 0, 1, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear() + 2, 11, 31, 23, 59, 59);
+        } else if (this.state.zoomLevel < 35) {
+            // 20%: Multi-year buffer
             startDate = new Date(effectiveMin.getFullYear() - 1, 0, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear() + 1, 11, 31, 23, 59, 59);
-        } else if (this.state.zoomLevel < 35) {
-            // 20% - 25%: Months as numbers
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 3, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 4, 0, 23, 59, 59);
-        } else if (this.state.zoomLevel < 65) {
-            // 35% - 50%: Weeks
+        } else if (this.state.zoomLevel < 50) {
+            // 35%: 1-2 years buffer
             startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 2, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 3, 0, 23, 59, 59);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 4, 0, 23, 59, 59);
         } else {
-            // Detailed zoom (>= 65%): Days
+            // Detailed zoom (>= 50%): Days buffer
             startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 1, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 2, 0, 23, 59, 59);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 3, 0, 23, 59, 59);
+        }
+
+        // For zoom < 50% (unit: week), align startDate to Monday to avoid half-week cuts
+        if (this.state.zoomLevel < 50) {
+            const dayOfWeek = startDate.getDay();
+            const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
+            startDate.setDate(startDate.getDate() + diffToMon);
+            startDate.setHours(0, 0, 0, 0);
         }
 
         g.config.start_date = startDate;
@@ -2297,7 +2257,7 @@ export class AllInOneTimelineAction extends Component {
         const midpointDate = new Date(minStart.getTime() + Math.round((maxEnd.getTime() - minStart.getTime()) / 2));
 
         // Choose the best matching zoom level purely from our standard ZOOM_STEPS:
-        // [10, 15, 20, 35, 50, 75, 100, 150, 200]
+        // [10, 15, 20, 35, 50, 75, 100, 150, 200, 250]
         let bestZoom = 100;
         if (durationDays > 365 * 3) {
             bestZoom = 10;
@@ -2313,8 +2273,12 @@ export class AllInOneTimelineAction extends Component {
             bestZoom = 75;
         } else if (durationDays > 10) {
             bestZoom = 100;
-        } else {
+        } else if (durationDays > 4) {
             bestZoom = 150;
+        } else if (durationDays > 2) {
+            bestZoom = 200;
+        } else {
+            bestZoom = 250;
         }
 
         // Apply standard zoom level centered on the task or project midpoint

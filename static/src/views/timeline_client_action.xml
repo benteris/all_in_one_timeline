@@ -64,7 +64,8 @@
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(75)">75% – Keli mėnesiai</a></li>
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(100)">100% – Normalus (Dienomis)</a></li>
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(150)">150% – Padidintas</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(200)">200% – Maksimalus</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(200)">200% – Labai didelis</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(250)">250% – Maksimalus</a></li>
                                     </ul>
                                 </div>
                                 <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomIn" title="Didinti / Zoom In">
