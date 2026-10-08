@@ -18,31 +18,20 @@
                     <div class="timeline_toolbar">
                         <div class="toolbar_left">
                             <!-- Project Filter Dropdown -->
-                            <select class="form-select form-select-sm project_select" style="width: 180px;" t-model="state.selectedProjectId" t-on-change="onProjectChange">
+                            <select class="form-select form-select-sm project_select" style="width: 200px;" t-model="state.selectedProjectId" t-on-change="onProjectChange">
                                 <option value="0">Visi projektai</option>
                                 <t t-foreach="state.projects" t-as="p" t-key="p.id">
                                     <option t-att-value="p.id" t-esc="p.name"/>
                                 </t>
                             </select>
-
-                            <!-- Navigation Group -->
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigatePrevious" title="Atgal / Previous">
-                                    <i class="fa fa-chevron-left"/>
-                                </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateToday" title="Šiandien / Jump to Today">
-                                    Šiandien
-                                </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateNext" title="Pirmyn / Next">
-                                    <i class="fa fa-chevron-right"/>
-                                </button>
-                            </div>
-
                         </div>
 
                         <div class="toolbar_right">
-                            <!-- Hierarchy Collapse/Expand & Fit to Screen -->
+                            <!-- Quick Focus to Today & Hierarchy & Fit to Screen -->
                             <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateToday" title="Grįžti į šiandien / Focus on Today">
+                                    <i class="fa fa-calendar-check-o me-1"/> Šiandien
+                                </button>
                                 <button class="btn btn-outline-secondary btn_timeline" t-att-disabled="!canUndo" t-on-click="undoAction" title="Atšaukti paskutinį veiksmą (Ctrl+Z) / Undo">
                                     <i class="fa fa-undo me-1"/> Atšaukti
                                 </button>

@@ -754,8 +754,19 @@ export class AllInOneTimelineAction extends Component {
             }
         }));
 
-        // Center on task date when clicked in grid or chart
-        this.eventIds.push(g.attachEvent("onTaskClick", (id) => {
+        // Selection / Click Handler: NEVER scroll if click is on the timeline chart or after a drag!
+        this.eventIds.push(g.attachEvent("onTaskClick", (id, e) => {
+            if (this._justDragged) {
+                return true;
+            }
+            // Check if the click occurred in the left sidebar tree grid
+            const isGridClick = e && e.target && e.target.closest && !!e.target.closest(".gantt_grid");
+            if (!isGridClick) {
+                // Click is on the timeline chart / bar itself - keep viewport completely steady without jumping!
+                return true;
+            }
+
+            // User specifically clicked the row in the left sidebar grid to find / locate a task/project
             if (id && g.isTaskExists(id)) {
                 const task = g.getTask(id);
                 if (task && task.start_date) {
@@ -764,12 +775,13 @@ export class AllInOneTimelineAction extends Component {
                     if (g.scrollTo) {
                         const pos = this.safePosFromDate(task.start_date);
                         if (pos >= 0) {
-                            const targetX = Math.max(0, pos - Math.floor(visibleWidth / 2));
-                            const currentY = g.getScrollState ? g.getScrollState().y : 0;
-                            g.scrollTo(targetX, currentY);
+                            const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
+                            const isVisible = (pos >= scrollState.x + 40 && pos <= scrollState.x + visibleWidth - 40);
+                            if (!isVisible) {
+                                const targetX = Math.max(0, pos - Math.floor(visibleWidth / 2));
+                                g.scrollTo(targetX, scrollState.y);
+                            }
                         }
-                    } else if (g.showDate) {
-                        g.showDate(task.start_date);
                     }
                     this.renderTodayMarker();
                 }
@@ -796,20 +808,6 @@ export class AllInOneTimelineAction extends Component {
             this.hideTooltip();
             const task = g.getTask(id);
             if (!task) return true;
-
-            // Expand timescale if dragged task is near past or future boundary
-            if (g.config.start_date && task.start_date) {
-                const diffPastMs = task.start_date.getTime() - g.config.start_date.getTime();
-                if (diffPastMs < 90 * 86400000) {
-                    this.expandTimelineToPast(0);
-                }
-            }
-            if (g.config.end_date && task.end_date) {
-                const diffFutureMs = g.config.end_date.getTime() - task.end_date.getTime();
-                if (diffFutureMs < 90 * 86400000) {
-                    this.expandTimelineToFuture(0);
-                }
-            }
 
             task._is_dragged = true;
             task._drag_start_origin = new Date(task.start_date);
@@ -1087,6 +1085,10 @@ export class AllInOneTimelineAction extends Component {
             this.hideTooltip();
             this.hideSnapGuide();
             this._snapTargetTimestamps = null;
+            this._justDragged = true;
+            setTimeout(() => {
+                this._justDragged = false;
+            }, 400);
 
             const task = g.getTask(id);
             if (!task) return;
@@ -1172,10 +1174,33 @@ export class AllInOneTimelineAction extends Component {
                 this._pendingUndoAction = null;
             }
 
+            // Save the exact current scroll position before saving/rendering
+            const scrollPos = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
+            const state = g.getState ? g.getState() : {};
+            const minScale = state.min_date || g.config.start_date;
+            const maxScale = state.max_date || g.config.end_date;
+            const needsScaleExpand = (minScale && task.start_date < minScale) || (maxScale && task.end_date > maxScale);
+
             try {
                 await this.orm.call("project.task", "save_timeline_batch_schedule", [updates]);
                 this.notification.add(_t("Tvarkaraštis atnaujintas"), { type: "success" });
-                await this.loadTimelineData();
+
+                if (needsScaleExpand) {
+                    this.ensureTimelineRange(task.start_date, task.end_date);
+                    g.render();
+                    if (g.scrollTo && scrollPos) {
+                        g.scrollTo(scrollPos.x, scrollPos.y);
+                    }
+                } else {
+                    // Update affected tasks in-place: completely smooth, zero reload flicker, zero scroll jump!
+                    g.updateTask(task.id);
+                    for (const u of updates) {
+                        if (u.id !== task.id && g.isTaskExists(u.id)) {
+                            g.updateTask(u.id);
+                        }
+                    }
+                    this.renderTodayMarker();
+                }
             } catch (err) {
                 this.notification.add(_t("Klaida atnaujinant: ") + err.message, { type: "danger" });
             }
@@ -1523,8 +1548,14 @@ export class AllInOneTimelineAction extends Component {
 
             this.state.projects = data.projects || [];
 
-            // Preserve scroll position and open/closed branch states
+            // Preserve scroll position (both in pixel offset and anchor date) and open/closed branch states
             const scrollPos = this.gantt.getScrollState ? this.gantt.getScrollState() : null;
+            let anchorDate = null;
+            if (scrollPos && scrollPos.x !== undefined && this.gantt.dateFromPos) {
+                const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
+                const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+                anchorDate = this.gantt.dateFromPos(scrollPos.x + Math.floor(visibleWidth / 2));
+            }
             const openStates = {};
             if (this.gantt.eachTask) {
                 this.gantt.eachTask((t) => {
@@ -1570,6 +1601,15 @@ export class AllInOneTimelineAction extends Component {
                     }
                 } else {
                     this.navigateToday();
+                }
+            } else if (anchorDate) {
+                const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
+                const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+                const newPos = this.safePosFromDate(anchorDate);
+                if (newPos >= 0 && this.gantt.scrollTo) {
+                    this.gantt.scrollTo(Math.max(0, newPos - Math.floor(visibleWidth / 2)), scrollPos ? scrollPos.y : 0);
+                } else if (scrollPos && (scrollPos.x !== undefined || scrollPos.y !== undefined)) {
+                    this.gantt.scrollTo(scrollPos.x, scrollPos.y);
                 }
             } else if (scrollPos && (scrollPos.x !== undefined || scrollPos.y !== undefined)) {
                 this.gantt.scrollTo(scrollPos.x, scrollPos.y);
@@ -2103,6 +2143,7 @@ export class AllInOneTimelineAction extends Component {
             this.gantt.showDate(today);
         }
         this.renderTodayMarker();
+        this.notification.add(_t("Fokusuota į šiandien"), { type: "info" });
     }
 
     navigatePrevious() {
