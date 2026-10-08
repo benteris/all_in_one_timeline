@@ -342,7 +342,6 @@ export class AllInOneTimelineAction extends Component {
 
         this.state = useState({
             selectedProjectId: initialProjId,
-            currentScale: "year",
             zoomLevel: initialZoom,
             projects: [],
             undoCount: 0,
@@ -1104,15 +1103,6 @@ export class AllInOneTimelineAction extends Component {
             task._fixed_parent = task.parent;
 
             // Collect magnetic snap target timestamps from other tasks/milestones/projects
-            const isDescendant = (parentId, childId) => {
-                let curr = g.getTask(childId);
-                while (curr && curr.parent) {
-                    if (curr.parent === parentId) return true;
-                    curr = g.getTask(curr.parent);
-                }
-                return false;
-            };
-
             const snapTimestamps = [];
             if (g.eachTask) {
                 g.eachTask((other) => {

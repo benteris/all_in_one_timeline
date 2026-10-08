@@ -102,6 +102,48 @@ class ProjectTask(models.Model):
                     child.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
                     child._cascade_clear_downstream_progress()
 
+    def _propagate_deadline_upward(self):
+        """
+        Recursively propagates extended child task deadlines up the parent task hierarchy
+        and to the associated milestone, ensuring parent containers and milestones encompass
+        all descendant planned deadlines.
+        """
+        for rec in self:
+            child_target = rec.date_deadline or rec.planned_date_end
+            if not child_target:
+                continue
+            child_dt = child_target if isinstance(child_target, datetime) else datetime.combine(child_target, time(17, 0, 0))
+            child_date = child_dt.date()
+
+            # 1. Propagate up the parent task hierarchy
+            curr_parent = rec.parent_id
+            while curr_parent:
+                p_dl = curr_parent.date_deadline
+                p_end = curr_parent.planned_date_end
+                need_update = False
+                if not p_dl or (isinstance(p_dl, datetime) and child_dt > p_dl) or (not isinstance(p_dl, datetime) and child_date > p_dl):
+                    need_update = True
+                elif p_end and ((isinstance(p_end, datetime) and child_dt > p_end) or (not isinstance(p_end, datetime) and child_date > p_end)):
+                    need_update = True
+
+                if need_update:
+                    try:
+                        curr_parent.sudo().write({"date_deadline": child_dt})
+                    except Exception:
+                        pass
+                curr_parent = curr_parent.parent_id
+
+            # 2. Propagate to milestone
+            if rec.milestone_id:
+                ms = rec.milestone_id
+                ms_dl = ms.deadline
+                ms_end = getattr(ms, "planned_date_end", False) or ms.deadline
+                if (not ms_dl or child_date > ms_dl) or (ms_end and child_date > ms_end):
+                    try:
+                        ms.sudo().write({"deadline": child_date})
+                    except Exception:
+                        pass
+
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
@@ -129,16 +171,7 @@ class ProjectTask(models.Model):
                         pass
 
         records = super().create(vals_list)
-        for rec in records:
-            if rec.milestone_id and rec.date_deadline:
-                ms = rec.milestone_id
-                base = ms.planned_date_end or ms.deadline
-                rec_dl = rec.date_deadline.date() if isinstance(rec.date_deadline, datetime) else rec.date_deadline
-                if base and rec_dl > base and (not ms.deadline or rec_dl > ms.deadline):
-                    try:
-                        ms.sudo().write({"deadline": rec_dl})
-                    except Exception:
-                        pass
+        records._propagate_deadline_upward()
         return records
 
     def write(self, vals):
@@ -175,41 +208,7 @@ class ProjectTask(models.Model):
 
         # Parent task and Milestone deadline propagation
         if "date_deadline" in vals or "planned_date_end" in vals or "parent_id" in vals or "milestone_id" in vals:
-            for rec in self:
-                child_target = rec.date_deadline or rec.planned_date_end
-                if not child_target:
-                    continue
-                child_dt = child_target if isinstance(child_target, datetime) else datetime.combine(child_target, time(17, 0, 0))
-                child_date = child_dt.date()
-
-                # 1. Propagate up the parent task hierarchy
-                curr_parent = rec.parent_id
-                while curr_parent:
-                    p_dl = curr_parent.date_deadline
-                    p_end = curr_parent.planned_date_end
-                    need_update = False
-                    if not p_dl or (isinstance(p_dl, datetime) and child_dt > p_dl) or (not isinstance(p_dl, datetime) and child_date > p_dl):
-                        need_update = True
-                    elif p_end and ((isinstance(p_end, datetime) and child_dt > p_end) or (not isinstance(p_end, datetime) and child_date > p_end)):
-                        need_update = True
-
-                    if need_update:
-                        try:
-                            curr_parent.sudo().write({"date_deadline": child_dt})
-                        except Exception:
-                            pass
-                    curr_parent = curr_parent.parent_id
-
-                # 2. Propagate to milestone
-                if rec.milestone_id:
-                    ms = rec.milestone_id
-                    ms_dl = ms.deadline
-                    ms_end = getattr(ms, "planned_date_end", False) or ms.deadline
-                    if (not ms_dl or child_date > ms_dl) or (ms_end and child_date > ms_end):
-                        try:
-                            ms.sudo().write({"deadline": child_date})
-                        except Exception:
-                            pass
+            self._propagate_deadline_upward()
 
         # If task state/progress changed to not done, clear downstream dependent tasks
         for rec in self:
@@ -1167,7 +1166,11 @@ class ProjectTask(models.Model):
                     elif progress is not None:
                         p_float = min(100.0, max(0.0, float(progress) * 100.0))
                         vals["progress"] = p_float
-                        if p_float < 100.0:
+                        if p_float >= 99.0:
+                            vals["state"] = "1_done"
+                        elif p_float < 100.0:
+                            if task.state == "1_done":
+                                vals["state"] = "01_in_progress"
                             task._cascade_clear_downstream_progress()
 
                     if vals:
