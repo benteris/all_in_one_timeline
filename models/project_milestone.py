@@ -49,7 +49,10 @@ class ProjectMilestone(models.Model):
             if ms.planned_date_end and not ms.date_start:
                 ms.date_start = ms.planned_date_end - timedelta(days=7)
             if ms.planned_date_end:
-                task_deadlines = [t.date_deadline for t in ms.task_ids if t.date_deadline]
+                task_deadlines = [
+                    t.date_deadline.date() if isinstance(t.date_deadline, datetime) else t.date_deadline
+                    for t in ms.task_ids if t.date_deadline
+                ]
                 if task_deadlines and max(task_deadlines) > ms.planned_date_end:
                     ms.deadline = max(task_deadlines)
                 elif not ms.deadline or ms.deadline < ms.planned_date_end:
@@ -68,7 +71,10 @@ class ProjectMilestone(models.Model):
         """When tasks have deadlines that exceed the milestone planned date or deadline,
         automatically extend the milestone deadline."""
         for ms in self:
-            deadlines = [t.date_deadline for t in ms.task_ids if t.date_deadline]
+            deadlines = [
+                t.date_deadline.date() if isinstance(t.date_deadline, datetime) else t.date_deadline
+                for t in ms.task_ids if t.date_deadline
+            ]
             base_date = ms.planned_date_end or ms.deadline
             if deadlines and base_date:
                 max_dl = max(deadlines)

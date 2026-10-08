@@ -922,41 +922,6 @@ export class AllInOneTimelineAction extends Component {
             return tClass + extraClass;
         };
 
-        // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header (strictly for day units only)
-        g.templates.scale_cell_class = (date, scale) => {
-            if (scale && scale.unit !== "day") {
-                return "";
-            }
-            if (this.state.zoomLevel < 50) {
-                return "";
-            }
-
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const d = new Date(date);
-            d.setHours(0, 0, 0, 0);
-
-            const isToday = (
-                d.getFullYear() === today.getFullYear() &&
-                d.getMonth() === today.getMonth() &&
-                d.getDate() === today.getDate()
-            );
-
-            const classes = [];
-            if (isToday) {
-                classes.push("today_scale_cell");
-            }
-
-            const hol = getLithuanianHoliday(d);
-            if (hol) {
-                classes.push("holiday_scale_cell");
-            } else if (isWeekend(d)) {
-                classes.push("weekend_scale_cell");
-            }
-
-            return classes.join(" ");
-        };
-
         // Mark Today, Weekends, and Lithuanian National Holidays in Timeline Background Cells
         g.templates.timeline_cell_class = (task, date) => {
             const today = new Date();
@@ -1713,24 +1678,27 @@ export class AllInOneTimelineAction extends Component {
      * Below 50% (< 50%): Day is omitted, keeping Year -> Quarter -> Month -> Week intact so UI doesn't jump.
      */
     applyScaleConfig(customColWidth = null) {
-        if (typeof customColWidth === "string") {
-            customColWidth = arguments[1] || null;
-        }
         const g = this.gantt;
         if (!g) return;
 
-        // Reset global scale_cell_class so non-day scales (Year, Month, etc.) are never styled as holidays
+        // Reset global scale_cell_class for day units (marks today, holidays, and weekends)
         g.templates.scale_cell_class = (date, scale) => {
             if (!scale || scale.unit !== "day") {
                 return "";
             }
-            const hol = getLithuanianHoliday(date);
-            if (hol) {
-                return "holiday_scale_cell";
-            } else if (isWeekend(date)) {
-                return "weekend_scale_cell";
+            const today = new Date();
+            const d = new Date(date);
+            const classes = [];
+            if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()) {
+                classes.push("today_scale_cell");
             }
-            return "";
+            const hol = getLithuanianHoliday(d);
+            if (hol) {
+                classes.push("holiday_scale_cell");
+            } else if (isWeekend(d)) {
+                classes.push("weekend_scale_cell");
+            }
+            return classes.join(" ");
         };
 
         const zoom = this.state.zoomLevel;
@@ -2326,14 +2294,6 @@ export class AllInOneTimelineAction extends Component {
         await this.loadTimelineData();
     }
 
-    changeScale(scale) {
-        if (scale === "year") this.setZoom(100);
-        else if (scale === "month") this.setZoom(75);
-        else if (scale === "week") this.setZoom(50);
-        else if (scale === "day") this.setZoom(150);
-        else this.setZoom(100);
-    }
-
     zoomIn(focalDate = null) {
         const validFocalDate = (focalDate instanceof Date && !isNaN(focalDate.getTime())) ? focalDate : null;
         const nextStep = ZOOM_STEPS.find((step) => step > this.state.zoomLevel);
@@ -2480,35 +2440,6 @@ export class AllInOneTimelineAction extends Component {
             scrollAndCenter();
             setTimeout(scrollAndCenter, 50);
         });
-    }
-
-    navigatePrevious() {
-        if (!this.gantt) return;
-        const pos = this.gantt.getScrollState ? this.gantt.getScrollState() : { x: 0, y: 0 };
-        const step = 350;
-        if (pos.x <= step) {
-            this.expandTimelineToPast(step);
-        } else {
-            this.gantt.scrollTo(pos.x - step, pos.y);
-        }
-        this.renderTodayMarker();
-    }
-
-    navigateNext() {
-        if (!this.gantt) return;
-        const pos = this.gantt.getScrollState ? this.gantt.getScrollState() : { x: 0, y: 0 };
-        const step = 350;
-        const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-        const scrollWidth = dataArea ? dataArea.scrollWidth : 0;
-        const clientWidth = dataArea ? dataArea.clientWidth : 0;
-        const maxScroll = Math.max(0, scrollWidth - clientWidth);
-
-        if (maxScroll > 0 && pos.x + step >= maxScroll - 100) {
-            this.expandTimelineToFuture(step);
-        } else {
-            this.gantt.scrollTo(pos.x + step, pos.y);
-        }
-        this.renderTodayMarker();
     }
 
     expandAll() {

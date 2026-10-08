@@ -21,6 +21,10 @@ Pagrindinės funkcijos:
 * Išmanus pritraukimas (Magnetic Snapping) prie tinklelio ir gretimų užduočių pradžios/pabaigos taškų.
 * Dinaminis mastelis: Diena, Savaitė, Mėnuo ir Metai (numatytasis vaizdas) su lietuviškais mėnesių ir dienų pavadinimais.
 * Pažymėti savaitgaliai ir Lietuvos valstybinės šventės.
+* Pilnas užduočių ir projektų būsenų atvaizdavimas (Vykdoma, Laukiama, Patvirtinta, Koregavimas, Atšaukta, Užbaigta) su atitinkamomis spalvomis ir piktogramomis.
+* Gairių planuojamos datos (Planned Date) ir automatinis gairių termino pratęsimas pagal vėluojančias užduotis.
+* Projektų viršutinio lygio terminai ir vėlavimo vizualizacija.
+* Tikslus vėlavimo darbo dienų ir darbo valandų skaičiavimas be savaitgalių ir švenčių dienų.
 * Tikslus darbo dienų ir darbo valandų (8:00 - 17:00, 8 val./d.) skaičiavimas informaciniame lange.
 * Pritaikymo ekrane („Pritaikyti ekrane“) funkcija pagal pasirinktą elementą arba visą tvarkaraštį.
 * Dvikryptis elastinis slinkimas į praeitį ir ateitį be dirbtinių apribojimų.
@@ -28,7 +32,7 @@ Pagrindinės funkcijos:
 * Užduočių priklausomybių ryšiai (Finish-to-Start) su rodyklėmis.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "1.1",
+    "version": "1.2",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",
