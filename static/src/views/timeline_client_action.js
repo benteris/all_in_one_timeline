@@ -358,6 +358,10 @@ export class AllInOneTimelineAction extends Component {
         });
 
         onWillUnmount(() => {
+            if (this._sidebarClickTimer) {
+                clearTimeout(this._sidebarClickTimer);
+                this._sidebarClickTimer = null;
+            }
             if (this.onKeyDown) {
                 window.removeEventListener("keydown", this.onKeyDown);
                 this.onKeyDown = null;
@@ -366,6 +370,10 @@ export class AllInOneTimelineAction extends Component {
             if (this.onGridClickHandler && this.ganttElement.el) {
                 this.ganttElement.el.removeEventListener("click", this.onGridClickHandler);
                 this.onGridClickHandler = null;
+            }
+            if (this.onGridDblClickHandler && this.ganttElement.el) {
+                this.ganttElement.el.removeEventListener("dblclick", this.onGridDblClickHandler);
+                this.onGridDblClickHandler = null;
             }
             if (this.onWheelHandler && this.ganttElement.el) {
                 this.ganttElement.el.removeEventListener("wheel", this.onWheelHandler);
@@ -782,12 +790,18 @@ export class AllInOneTimelineAction extends Component {
                 return true;
             }
 
-            // User clicked the row in the left sidebar grid: fit to screen and center project/task
+            // User clicked the row in the left sidebar grid: fit to screen and center project/task (debounced to allow double-click)
             if (id && g.isTaskExists(id)) {
                 const isTreeIcon = e && e.target && (e.target.closest(".gantt_tree_icon") || e.target.closest(".gantt_tree_indent"));
                 const isActionBtn = e && e.target && e.target.closest(".grid_action_btn");
                 if (!isTreeIcon && !isActionBtn) {
-                    this.fitToScreen(id);
+                    if (this._sidebarClickTimer) {
+                        clearTimeout(this._sidebarClickTimer);
+                    }
+                    this._sidebarClickTimer = setTimeout(() => {
+                        this._sidebarClickTimer = null;
+                        this.fitToScreen(id);
+                    }, 250);
                 }
             }
             return true;
@@ -1312,6 +1326,36 @@ export class AllInOneTimelineAction extends Component {
                 }
             };
             this.ganttElement.el.addEventListener("click", this.onGridClickHandler);
+
+            if (this.onGridDblClickHandler) {
+                this.ganttElement.el.removeEventListener("dblclick", this.onGridDblClickHandler);
+            }
+            this.onGridDblClickHandler = (e) => {
+                const gridRow = e.target.closest(".gantt_grid .gantt_row");
+                if (!gridRow) return;
+                const isActionBtn = e.target.closest(".grid_action_btn");
+                const isTreeIcon = e.target.closest(".gantt_tree_icon");
+                if (isActionBtn || isTreeIcon) return;
+
+                if (this._sidebarClickTimer) {
+                    clearTimeout(this._sidebarClickTimer);
+                    this._sidebarClickTimer = null;
+                }
+
+                const taskId = gridRow.getAttribute("task_id");
+                if (taskId && g.isTaskExists(taskId)) {
+                    const task = g.getTask(taskId);
+                    if (task.is_project) {
+                        this.openProjectFormDialog(task.odoo_id);
+                    } else if (task.is_milestone) {
+                        this.openMilestoneFormDialog(task.odoo_id);
+                    } else {
+                        this.openTaskFormDialog(task.odoo_id);
+                    }
+                }
+            };
+            this.ganttElement.el.addEventListener("dblclick", this.onGridDblClickHandler);
+
             this.ganttElement.el.addEventListener("mousedown", () => this.hideTooltip());
 
             if (this.onWheelHandler) {
@@ -1516,8 +1560,7 @@ export class AllInOneTimelineAction extends Component {
             const scrollPos = this.gantt.getScrollState ? this.gantt.getScrollState() : null;
             let anchorDate = null;
             if (scrollPos && scrollPos.x !== undefined && this.gantt.dateFromPos) {
-                const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-                const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+                const visibleWidth = this.getTimelineVisibleWidth();
                 anchorDate = this.gantt.dateFromPos(scrollPos.x + Math.floor(visibleWidth / 2));
             }
             const openStates = {};
@@ -1557,8 +1600,7 @@ export class AllInOneTimelineAction extends Component {
                     }
                 }
                 if (firstTaskStart && this.gantt.scrollTo) {
-                    const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-                    const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+                    const visibleWidth = this.getTimelineVisibleWidth();
                     const pos = this.safePosFromDate(firstTaskStart);
                     if (pos >= 0) {
                         this.gantt.scrollTo(Math.max(0, pos - Math.floor(visibleWidth / 3)), 0);
@@ -1567,8 +1609,7 @@ export class AllInOneTimelineAction extends Component {
                     this.navigateToday();
                 }
             } else if (anchorDate) {
-                const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-                const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+                const visibleWidth = this.getTimelineVisibleWidth();
                 const newPos = this.safePosFromDate(anchorDate);
                 if (newPos >= 0 && this.gantt.scrollTo) {
                     this.gantt.scrollTo(Math.max(0, newPos - Math.floor(visibleWidth / 2)), scrollPos ? scrollPos.y : 0);
@@ -1974,7 +2015,7 @@ export class AllInOneTimelineAction extends Component {
         this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], focalDate);
     }
 
-    setZoom(level, customFocalDate = null) {
+    setZoom(level, customFocalDate = null, customScrollY = null) {
         const g = this.gantt;
         if (!g) {
             this.state.zoomLevel = level;
@@ -2004,11 +2045,9 @@ export class AllInOneTimelineAction extends Component {
                 });
             }
 
-            const dataArea = this.ganttElement.el
-                ? (this.ganttElement.el.querySelector(".gantt_data_area") || this.ganttElement.el.querySelector(".gantt_task"))
-                : null;
-            const visibleWidth = dataArea && dataArea.clientWidth > 50 ? dataArea.clientWidth : 800;
+            const visibleWidth = this.getTimelineVisibleWidth();
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
+            const targetScrollY = (customScrollY !== null && customScrollY !== undefined) ? customScrollY : scrollState.y;
 
             // 2. Identify the anchor date (focalDate)
             let focalDate = customFocalDate;
@@ -2065,9 +2104,9 @@ export class AllInOneTimelineAction extends Component {
                 if (focalDate && g.scrollTo) {
                     const newPos = this.safePosFromDate(focalDate);
                     if (newPos >= 0) {
-                        const currentVisWidth = dataArea && dataArea.clientWidth > 50 ? dataArea.clientWidth : visibleWidth;
-                        const targetScrollX = Math.max(0, newPos - Math.floor(currentVisWidth / 2));
-                        g.scrollTo(targetScrollX, scrollState.y);
+                        const curVisWidth = this.getTimelineVisibleWidth();
+                        const targetScrollX = Math.max(0, Math.round(newPos - curVisWidth / 2));
+                        g.scrollTo(targetScrollX, targetScrollY);
                     }
                 }
                 this.renderTodayMarker();
@@ -2089,21 +2128,16 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
-     * Helper to get the exact visible pixel width of the timeline chart area
+     * Helper to get the exact visible pixel width of the timeline chart area (viewport)
      */
     getTimelineVisibleWidth() {
-        const g = this.gantt;
-        const scrollState = g && g.getScrollState ? g.getScrollState() : null;
-        if (scrollState && scrollState.inner_width > 50) {
-            return scrollState.inner_width;
-        }
         if (this.ganttElement && this.ganttElement.el) {
-            const taskContainer = this.ganttElement.el.querySelector(".gantt_task") || this.ganttElement.el.querySelector(".gantt_data_area");
+            const taskContainer = this.ganttElement.el.querySelector(".gantt_task");
             if (taskContainer && taskContainer.clientWidth > 50) {
                 return taskContainer.clientWidth;
             }
             const totalWidth = this.ganttElement.el.clientWidth;
-            const gridWidth = (g && g.config && g.config.grid_width) || 440;
+            const gridWidth = (this.gantt && this.gantt.config && this.gantt.config.grid_width) || 440;
             if (totalWidth > gridWidth + 50) {
                 return totalWidth - gridWidth;
             }
@@ -2127,18 +2161,25 @@ export class AllInOneTimelineAction extends Component {
             g.render();
         }
 
-        this.renderTodayMarker();
+        const scrollAndCenter = () => {
+            this.renderTodayMarker();
+            const visibleWidth = this.getTimelineVisibleWidth();
+            const todayPx = this.safePosFromDate(today);
 
-        const visibleWidth = this.getTimelineVisibleWidth();
-        const todayPx = this.safePosFromDate(today);
+            if (todayPx >= 0 && g.scrollTo) {
+                const targetX = Math.max(0, Math.round(todayPx - visibleWidth / 2));
+                const scrollState = g.getScrollState ? g.getScrollState() : { y: 0 };
+                g.scrollTo(targetX, scrollState.y);
+            } else if (g.showDate) {
+                g.showDate(today);
+            }
+        };
 
-        if (todayPx >= 0 && g.scrollTo) {
-            const targetX = Math.max(0, Math.round(todayPx - visibleWidth / 2));
-            const scrollState = g.getScrollState ? g.getScrollState() : { y: 0 };
-            g.scrollTo(targetX, scrollState.y);
-        } else if (g.showDate) {
-            g.showDate(today);
-        }
+        scrollAndCenter();
+        requestAnimationFrame(() => {
+            scrollAndCenter();
+            setTimeout(scrollAndCenter, 50);
+        });
     }
 
     navigatePrevious() {
@@ -2191,12 +2232,6 @@ export class AllInOneTimelineAction extends Component {
     /**
      * Fit selected task/project/milestone or entire timeline to screen (Pritaikyti ekrane).
      * If a task, subtask, milestone or project is selected, fits that item's span to the screen.
-     * Selects the best standard zoom level from ZOOM_STEPS so the item fits horizontally,
-     * and centers the item in the viewport.
-     */
-    /**
-     * Fit selected task/project/milestone or entire timeline to screen (Pritaikyti ekrane).
-     * If a task, subtask, milestone or project is selected, fits that item's span to the screen.
      * Selects the best standard zoom level from ZOOM_STEPS based on visible screen width so the item fits horizontally,
      * and centers the item in the viewport.
      */
@@ -2204,9 +2239,11 @@ export class AllInOneTimelineAction extends Component {
         if (!this.gantt) return;
         const g = this.gantt;
 
+        const validTargetId = (typeof targetId === "string" || typeof targetId === "number") ? targetId : null;
+
         let targetTask = null;
-        if (targetId && g.isTaskExists(targetId)) {
-            targetTask = g.getTask(targetId);
+        if (validTargetId && g.isTaskExists(validTargetId)) {
+            targetTask = g.getTask(validTargetId);
         } else {
             const selectedId = g.getSelectedId ? g.getSelectedId() : null;
             if (selectedId && g.isTaskExists(selectedId)) {
@@ -2269,19 +2306,23 @@ export class AllInOneTimelineAction extends Component {
         for (const z of candidateZooms) {
             const pxPerDay = ZOOM_PX_PER_DAY[z] || 32;
             const estimatedPx = durationDays * pxPerDay;
-            if (estimatedPx <= Math.max(300, visibleWidth * 1.05)) {
+            if (estimatedPx <= Math.max(300, visibleWidth * 1.25)) {
                 bestZoom = z;
                 break;
             }
         }
 
+        let targetY = null;
         if (targetTask) {
             if (g.selectTask) g.selectTask(targetTask.id);
-            if (g.showTask) g.showTask(targetTask.id);
+            const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(targetTask) : null;
+            if (taskPos && taskPos.top !== undefined) {
+                targetY = Math.max(0, taskPos.top - 80);
+            }
         }
 
         // Apply standard zoom level centered on the task or project midpoint
-        this.setZoom(bestZoom, midpointDate);
+        this.setZoom(bestZoom, midpointDate, targetY);
     }
 
     /**
