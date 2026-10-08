@@ -453,16 +453,21 @@
             }
         }
 
-        /* Milestones (Warm Amber / Gold #f59e0b, Green when reached) - 100% STRAIGHT BARS */
+        /* Milestones / Stages (Professional Blue #2563eb, Green when reached) - 100% STRAIGHT BARS */
         &.timeline_milestone_bar, &.gantt_milestone {
             height: 34px !important;
             line-height: 34px !important;
             border-radius: 6px !important;
-            background-color: #f59e0b !important;
-            border: 1px solid #d97706 !important;
-            box-shadow: 0 2px 4px rgba(245, 158, 11, 0.25) !important;
+            background-color: #2563eb !important;
+            border: 1px solid #1d4ed8 !important;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25) !important;
             visibility: visible !important;
             transform: none !important;
+
+            &.milestone_state_in_progress {
+                background-color: #2563eb !important;
+                border-color: #1d4ed8 !important;
+            }
 
             .gantt_task_content {
                 position: absolute !important;

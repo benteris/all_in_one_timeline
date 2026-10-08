@@ -616,7 +616,7 @@ class ProjectTask(models.Model):
                     milestone_color = "#16a34a"
                 else:
                     m_state = "01_in_progress"
-                    milestone_color = "#f59e0b"
+                    milestone_color = "#2563eb"
 
                 # Milestone Deadline and Automatic Delay Extension from Contained Tasks
                 m_deadline_str = False

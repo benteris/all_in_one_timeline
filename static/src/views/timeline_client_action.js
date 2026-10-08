@@ -522,7 +522,7 @@ export class AllInOneTimelineAction extends Component {
                     if (task.is_milestone) {
                         const icon = (task.is_done || task.state === "1_done")
                             ? "fa fa-check-circle text-success"
-                            : "fa fa-flag text-warning";
+                            : "fa fa-flag text-primary";
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
                     const icon = (task.is_done || task.state === "1_done")
@@ -620,7 +620,7 @@ export class AllInOneTimelineAction extends Component {
             if (task.is_milestone) {
                 return `
                     <div class="gantt_tooltip_inner">
-                        <div class="tooltip_title"><i class="fa fa-flag text-warning me-1"></i>${task.text}</div>
+                        <div class="tooltip_title"><i class="fa fa-flag text-primary me-1"></i>${task.text}</div>
                         <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projekto gairė</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
@@ -1779,23 +1779,16 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
-     * Open standard Odoo Task Form Dialog
+     * Open standard Odoo Task Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openTaskFormDialog(taskId) {
-        this.actionService.doAction(
-            {
-                type: "ir.actions.act_window",
-                res_model: "project.task",
-                res_id: taskId,
-                views: [[false, "form"]],
-                target: "new",
-            },
-            {
-                onClose: () => {
-                    this.loadTimelineData();
-                },
-            }
-        );
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "project.task",
+            res_id: taskId,
+            views: [[false, "form"]],
+            target: "current",
+        });
     }
 
     /**
@@ -1890,43 +1883,29 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
-     * Open standard Odoo Milestone Form Dialog
+     * Open standard Odoo Milestone Form (Full view)
      */
     openMilestoneFormDialog(milestoneId) {
-        this.actionService.doAction(
-            {
-                type: "ir.actions.act_window",
-                res_model: "project.milestone",
-                res_id: milestoneId,
-                views: [[false, "form"]],
-                target: "new",
-            },
-            {
-                onClose: () => {
-                    this.loadTimelineData();
-                },
-            }
-        );
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "project.milestone",
+            res_id: milestoneId,
+            views: [[false, "form"]],
+            target: "current",
+        });
     }
 
     /**
-     * Open standard Odoo Project Form Dialog
+     * Open standard Odoo Project Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openProjectFormDialog(projectId) {
-        this.actionService.doAction(
-            {
-                type: "ir.actions.act_window",
-                res_model: "project.project",
-                res_id: projectId,
-                views: [[false, "form"]],
-                target: "new",
-            },
-            {
-                onClose: () => {
-                    this.loadTimelineData();
-                },
-            }
-        );
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "project.project",
+            res_id: projectId,
+            views: [[false, "form"]],
+            target: "current",
+        });
     }
 
     /**
