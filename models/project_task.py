@@ -445,22 +445,35 @@ class ProjectTask(models.Model):
             p_stage_name = (p.stage_id.name or "").lower() if p.stage_id else ""
             p_update_status = p.last_update_status or ""
 
-            if p_is_done or "done" in p_stage_name or "completed" in p_stage_name or p_update_status == "done":
+            # Check project status (last_update_status from Kanban / Project form)
+            if p_update_status == "on_hold":
+                p_state = "04_on_hold"
+                project_color = "#00a09d"
+            elif p_update_status == "on_track":
+                p_state = "03_on_track"
+                project_color = "#10b981"
+            elif p_update_status == "at_risk":
+                p_state = "02_at_risk"
+                project_color = "#f59e0b"
+            elif p_update_status == "off_track":
+                p_state = "1_off_track"
+                project_color = "#ef4444"
+            elif p_update_status == "done" or p_is_done or "done" in p_stage_name or "completed" in p_stage_name:
                 p_state = "1_done"
                 project_color = "#16a34a"
                 p_is_done = True
             elif "approved" in p_stage_name or "patvirtinta" in p_stage_name:
                 p_state = "03_approved"
                 project_color = "#10b981"
-            elif "changes" in p_stage_name or "koreg" in p_stage_name or p_update_status in ("at_risk", "off_track"):
+            elif "changes" in p_stage_name or "koreg" in p_stage_name:
                 p_state = "02_changes_requested"
                 project_color = "#f59e0b"
             elif "cancel" in p_stage_name or "atšauk" in p_stage_name:
                 p_state = "1_canceled"
                 project_color = "#dc3545"
-            elif "hold" in p_stage_name or "lauk" in p_stage_name or p_update_status == "on_hold":
-                p_state = "04_waiting_normal"
-                project_color = "#64748b"
+            elif "hold" in p_stage_name or "lauk" in p_stage_name:
+                p_state = "04_on_hold"
+                project_color = "#00a09d"
             else:
                 p_state = "01_in_progress"
                 project_color = "#5f5285"
@@ -526,6 +539,7 @@ class ProjectTask(models.Model):
                 ] if p.user_id else [],
                 "color": project_color,
                 "state": p_state,
+                "last_update_status": p_update_status,
                 "is_project": True,
                 "is_milestone": False,
                 "is_done": bool(p_is_done),

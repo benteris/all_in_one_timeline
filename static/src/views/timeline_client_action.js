@@ -561,18 +561,23 @@ export class AllInOneTimelineAction extends Component {
                 resize: true,
                 template: (task) => {
                     if (task.is_project) {
-                        const icon = (task.is_done || task.state === "1_done")
-                            ? "fa fa-check-circle text-success"
-                            : (task.state === "03_approved"
-                                ? "fa fa-circle text-success"
-                                : (task.state === "02_changes_requested"
-                                    ? "fa fa-exclamation-triangle text-warning"
-                                    : (task.state === "1_canceled"
-                                        ? "fa fa-times-circle text-danger"
-                                        : (task.state === "04_waiting_normal"
-                                            ? "fa fa-clock-o text-secondary"
-                                            : "fa fa-folder-open text-primary"))));
-                        return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
+                        const pStatus = task.last_update_status || "";
+                        let icon = "fa fa-folder-open text-primary";
+                        let customStyle = "";
+                        if (pStatus === "on_hold" || task.state === "04_on_hold" || task.state === "04_waiting_normal") {
+                            icon = "fa fa-circle";
+                            customStyle = "color: #00a09d;";
+                        } else if (pStatus === "on_track" || task.state === "03_on_track" || task.state === "03_approved") {
+                            icon = "fa fa-circle text-success";
+                        } else if (pStatus === "at_risk" || task.state === "02_at_risk" || task.state === "02_changes_requested") {
+                            icon = "fa fa-circle text-warning";
+                        } else if (pStatus === "off_track" || task.state === "1_off_track" || task.state === "1_canceled") {
+                            icon = "fa fa-circle text-danger";
+                        } else if (pStatus === "done" || task.is_done || task.state === "1_done") {
+                            icon = "fa fa-check-circle text-success";
+                        }
+                        const styleAttr = customStyle ? ` style="${customStyle}"` : "";
+                        return `<i class="${icon} me-1"${styleAttr}></i><b>${task.text}</b>`;
                     }
                     if (task.is_milestone) {
                         const icon = (task.is_done || task.state === "1_done")
@@ -804,16 +809,17 @@ export class AllInOneTimelineAction extends Component {
 
             if (task.is_project) {
                 let pClass = "gantt_project";
-                if (state === "1_done" || task.is_done || task.progress >= 1.0) {
-                    pClass += " project_done project_state_done";
-                } else if (state === "03_approved") {
-                    pClass += " project_state_approved";
-                } else if (state === "02_changes_requested") {
-                    pClass += " project_state_changes_requested";
-                } else if (state === "1_canceled") {
-                    pClass += " project_state_canceled";
-                } else if (state === "04_waiting_normal") {
-                    pClass += " project_state_waiting";
+                const pStatus = task.last_update_status || "";
+                if (pStatus === "on_hold" || state === "04_on_hold" || state === "04_waiting_normal") {
+                    pClass += " project_status_on_hold project_state_waiting";
+                } else if (pStatus === "on_track" || state === "03_on_track" || state === "03_approved") {
+                    pClass += " project_status_on_track project_state_approved";
+                } else if (pStatus === "at_risk" || state === "02_at_risk" || state === "02_changes_requested") {
+                    pClass += " project_status_at_risk project_state_changes_requested";
+                } else if (pStatus === "off_track" || state === "1_off_track" || state === "1_canceled") {
+                    pClass += " project_status_off_track project_state_canceled";
+                } else if (pStatus === "done" || state === "1_done" || task.is_done || task.progress >= 1.0) {
+                    pClass += " project_done project_state_done project_status_done";
                 } else {
                     pClass += " project_state_in_progress";
                 }
@@ -995,9 +1001,14 @@ export class AllInOneTimelineAction extends Component {
 
             // User clicked the row in the left sidebar grid: fit to screen and center project/task (debounced to allow double-click)
             if (id && g.isTaskExists(id)) {
-                const isTreeIcon = e && e.target && (e.target.closest(".gantt_tree_icon") || e.target.closest(".gantt_tree_indent"));
-                const isActionBtn = e && e.target && e.target.closest(".grid_action_btn");
-                if (!isTreeIcon && !isActionBtn) {
+                const isTreeToggle = e && e.target && e.target.closest && (
+                    e.target.closest(".gantt_tree_icon.gantt_close") ||
+                    e.target.closest(".gantt_tree_icon.gantt_open") ||
+                    e.target.closest(".gantt_close") ||
+                    e.target.closest(".gantt_open")
+                );
+                const isActionBtn = e && e.target && e.target.closest && e.target.closest(".grid_action_btn");
+                if (!isTreeToggle && !isActionBtn) {
                     if (this._sidebarClickTimer) {
                         clearTimeout(this._sidebarClickTimer);
                     }
@@ -2267,7 +2278,7 @@ export class AllInOneTimelineAction extends Component {
         this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], validFocalDate);
     }
 
-    setZoom(level, customFocalDate = null, customScrollY = null) {
+    setZoom(level, customFocalDate = null, customScrollY = null, itemSpan = null) {
         const g = this.gantt;
         if (!g) {
             this.state.zoomLevel = level;
@@ -2284,8 +2295,9 @@ export class AllInOneTimelineAction extends Component {
             // 1. Identify focal anchor date (valid Date only)
             let focalDate = (customFocalDate instanceof Date && !isNaN(customFocalDate.getTime())) ? customFocalDate : null;
 
-            // If not explicitly provided (e.g. toolbar zoom buttons or scale dropdown), anchor to the visual center of current viewport
-            if (!focalDate && g.dateFromPos) {
+            if (itemSpan && itemSpan.minStart instanceof Date && !isNaN(itemSpan.minStart.getTime())) {
+                focalDate = itemSpan.minStart;
+            } else if (!focalDate && g.dateFromPos) {
                 const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
                 const centerDate = g.dateFromPos(currentCenterPx);
                 if (centerDate instanceof Date && !isNaN(centerDate.getTime())) {
@@ -2300,15 +2312,30 @@ export class AllInOneTimelineAction extends Component {
             // 2. Apply the new zoom level and reconfigure scale & range
             this.state.zoomLevel = level;
             this.applyScaleConfig();
-            this.ensureTimelineRange(focalDate, focalDate);
+            this.ensureTimelineRange(focalDate, (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate);
             g.render();
 
-            // 3. Center viewport smoothly around focalDate
-            const centerOnFocal = () => {
-                if (focalDate && g.scrollTo) {
+            // 3. Center viewport smoothly around focalDate or itemSpan
+            const applyScroll = () => {
+                if (!g.scrollTo) return;
+                const curVisWidth = this.getTimelineVisibleWidth();
+
+                if (itemSpan && itemSpan.minStart && itemSpan.maxEnd) {
+                    const sPx = this.safePosFromDate(itemSpan.minStart);
+                    const ePx = this.safePosFromDate(itemSpan.maxEnd);
+                    if (sPx >= 0 && ePx >= sPx) {
+                        const spanW = ePx - sPx;
+                        const margin = Math.max(30, Math.floor((curVisWidth - spanW) / 2));
+                        const targetScrollX = Math.max(0, Math.round(sPx - margin));
+                        g.scrollTo(targetScrollX, targetScrollY);
+                        this.renderTodayMarker();
+                        return;
+                    }
+                }
+
+                if (focalDate) {
                     const newPos = this.safePosFromDate(focalDate);
                     if (newPos >= 0) {
-                        const curVisWidth = this.getTimelineVisibleWidth();
                         const targetScrollX = Math.max(0, Math.round(newPos - curVisWidth / 2));
                         g.scrollTo(targetScrollX, targetScrollY);
                     }
@@ -2316,12 +2343,12 @@ export class AllInOneTimelineAction extends Component {
                 this.renderTodayMarker();
             };
 
-            centerOnFocal();
+            applyScroll();
 
             requestAnimationFrame(() => {
-                centerOnFocal();
+                applyScroll();
                 setTimeout(() => {
-                    centerOnFocal();
+                    applyScroll();
                     this._isZooming = false;
                     this.saveViewState();
                 }, 80);
@@ -2514,16 +2541,17 @@ export class AllInOneTimelineAction extends Component {
         }
 
         const durationDays = Math.max(1, Math.round((maxEnd.getTime() - minStart.getTime()) / 86400000));
-        const midpointDate = new Date(minStart.getTime() + Math.round((maxEnd.getTime() - minStart.getTime()) / 2));
 
         // Dynamically find the best matching zoom level from predefined ZOOM_STEPS based on visible width:
+        // We constrain the item's duration to at most 75% of visibleWidth so there is balanced margin on both sides
         const visibleWidth = this.getTimelineVisibleWidth();
+        const targetMaxPx = Math.max(250, Math.floor(visibleWidth * 0.75));
         const candidateZooms = [250, 200, 150, 100, 75, 50, 35, 20, 15, 10];
         let bestZoom = 10;
         for (const z of candidateZooms) {
             const pxPerDay = ZOOM_PX_PER_DAY[z] || 32;
             const estimatedPx = durationDays * pxPerDay;
-            if (estimatedPx <= Math.max(300, visibleWidth * 1.25)) {
+            if (estimatedPx <= targetMaxPx) {
                 bestZoom = z;
                 break;
             }
@@ -2538,8 +2566,8 @@ export class AllInOneTimelineAction extends Component {
             }
         }
 
-        // Apply standard zoom level centered on the task or project midpoint
-        this.setZoom(bestZoom, midpointDate, targetY);
+        // Apply standard zoom level centered on the item span with balanced margins
+        this.setZoom(bestZoom, null, targetY, { minStart, maxEnd });
     }
 
     /**
