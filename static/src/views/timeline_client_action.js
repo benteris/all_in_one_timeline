@@ -42,6 +42,7 @@ export const LITHUANIAN_MONTHS_SHORT = [
 ];
 
 export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250];
+export const TIMELINE_VIEW_STATE_KEY = "all_in_one_timeline_viewport_state";
 
 export const ZOOM_PX_PER_DAY = {
     250: 80,
@@ -319,10 +320,30 @@ export class AllInOneTimelineAction extends Component {
             }
         }
 
+        let savedState = null;
+        try {
+            const raw = sessionStorage.getItem(TIMELINE_VIEW_STATE_KEY);
+            if (raw) {
+                savedState = JSON.parse(raw);
+            }
+        } catch {}
+
+        let initialZoom = 100;
+        if (savedState && typeof savedState.zoomLevel === "number" && ZOOM_STEPS.includes(savedState.zoomLevel)) {
+            initialZoom = savedState.zoomLevel;
+        }
+
+        let initialProjId = defaultProjId;
+        if (!initialProjId && savedState && typeof savedState.selectedProjectId === "number") {
+            initialProjId = savedState.selectedProjectId;
+        }
+
+        this._savedViewState = savedState;
+
         this.state = useState({
-            selectedProjectId: defaultProjId,
+            selectedProjectId: initialProjId,
             currentScale: "year",
-            zoomLevel: 100,
+            zoomLevel: initialZoom,
             projects: [],
             undoCount: 0,
         });
@@ -334,6 +355,7 @@ export class AllInOneTimelineAction extends Component {
         this.onGridClickHandler = null;
         this._initialScrollDone = false;
         this._isExpandingRange = false;
+        this._saveViewStateTimer = null;
 
         this.onKeyDown = (e) => {
             if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable)) {
@@ -358,6 +380,11 @@ export class AllInOneTimelineAction extends Component {
         });
 
         onWillUnmount(() => {
+            this.saveViewState();
+            if (this._saveViewStateTimer) {
+                clearTimeout(this._saveViewStateTimer);
+                this._saveViewStateTimer = null;
+            }
             if (this._sidebarClickTimer) {
                 clearTimeout(this._sidebarClickTimer);
                 this._sidebarClickTimer = null;
@@ -406,6 +433,34 @@ export class AllInOneTimelineAction extends Component {
             controlPanel: {},
             ...this.props.display,
         };
+    }
+
+    /**
+     * Save current timeline viewport (zoom level, project filter, center date, and scroll positions)
+     * into sessionStorage so that navigating to form views and returning restores exact viewport.
+     */
+    saveViewState() {
+        if (!this.gantt) return;
+        try {
+            const scroll = this.gantt.getScrollState ? this.gantt.getScrollState() : { x: 0, y: 0 };
+            const visWidth = this.getTimelineVisibleWidth();
+            let centerDate = null;
+            if (this.gantt.dateFromPos) {
+                const centerPx = scroll.x + Math.floor(visWidth / 2);
+                const d = this.gantt.dateFromPos(centerPx);
+                if (d && !isNaN(d.getTime())) {
+                    centerDate = d.getTime();
+                }
+            }
+            const stateObj = {
+                zoomLevel: this.state.zoomLevel,
+                selectedProjectId: this.state.selectedProjectId,
+                scrollX: scroll.x,
+                scrollY: scroll.y,
+                centerDate: centerDate,
+            };
+            sessionStorage.setItem(TIMELINE_VIEW_STATE_KEY, JSON.stringify(stateObj));
+        } catch {}
     }
 
     hideTooltip() {
@@ -895,6 +950,16 @@ export class AllInOneTimelineAction extends Component {
         this.eventIds.push(g.attachEvent("onGanttScroll", (oldLeft, oldTop, left, top) => {
             this.hideTooltip();
             this.renderTodayMarker();
+
+            if (!this._isZooming) {
+                if (this._saveViewStateTimer) {
+                    clearTimeout(this._saveViewStateTimer);
+                }
+                this._saveViewStateTimer = setTimeout(() => {
+                    this._saveViewStateTimer = null;
+                    this.saveViewState();
+                }, 150);
+            }
 
             // Bidirectional elastic infinite scroll: expand only when user actively scrolls past edge
             if (!this._isExpandingRange && !this._isZooming) {
@@ -1732,7 +1797,36 @@ export class AllInOneTimelineAction extends Component {
             this.ensureTimelineRange();
             this.gantt.render();
 
-            if (this._projectChanged) {
+            if (this._savedViewState) {
+                const saved = this._savedViewState;
+                this._savedViewState = null;
+                this._initialScrollDone = true;
+
+                const restoreViewport = () => {
+                    if (!this.gantt) return;
+                    const visWidth = this.getTimelineVisibleWidth();
+                    if (saved.centerDate) {
+                        const cDate = new Date(saved.centerDate);
+                        const pos = this.safePosFromDate(cDate);
+                        if (pos >= 0 && this.gantt.scrollTo) {
+                            const targetX = Math.max(0, Math.round(pos - visWidth / 2));
+                            this.gantt.scrollTo(targetX, saved.scrollY || 0);
+                            this.renderTodayMarker();
+                            return;
+                        }
+                    }
+                    if (typeof saved.scrollX === "number" && this.gantt.scrollTo) {
+                        this.gantt.scrollTo(saved.scrollX, saved.scrollY || 0);
+                        this.renderTodayMarker();
+                    }
+                };
+
+                restoreViewport();
+                requestAnimationFrame(() => {
+                    restoreViewport();
+                    setTimeout(restoreViewport, 60);
+                });
+            } else if (this._projectChanged) {
                 this._projectChanged = false;
                 let firstTaskStart = null;
                 if (data.tasks && data.tasks.length > 0) {
@@ -1782,6 +1876,7 @@ export class AllInOneTimelineAction extends Component {
      * Open standard Odoo Task Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openTaskFormDialog(taskId) {
+        this.saveViewState();
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.task",
@@ -1886,6 +1981,7 @@ export class AllInOneTimelineAction extends Component {
      * Open standard Odoo Milestone Form (Full view)
      */
     openMilestoneFormDialog(milestoneId) {
+        this.saveViewState();
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.milestone",
@@ -1899,6 +1995,7 @@ export class AllInOneTimelineAction extends Component {
      * Open standard Odoo Project Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openProjectFormDialog(projectId) {
+        this.saveViewState();
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.project",
@@ -2146,6 +2243,7 @@ export class AllInOneTimelineAction extends Component {
     async onProjectChange(e) {
         this.state.selectedProjectId = parseInt(e.target.value);
         this._projectChanged = true;
+        this.saveViewState();
         await this.loadTimelineData();
     }
 
@@ -2158,13 +2256,15 @@ export class AllInOneTimelineAction extends Component {
     }
 
     zoomIn(focalDate = null) {
+        const validFocalDate = (focalDate instanceof Date && !isNaN(focalDate.getTime())) ? focalDate : null;
         const nextStep = ZOOM_STEPS.find((step) => step > this.state.zoomLevel);
-        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[ZOOM_STEPS.length - 1], focalDate);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[ZOOM_STEPS.length - 1], validFocalDate);
     }
 
     zoomOut(focalDate = null) {
+        const validFocalDate = (focalDate instanceof Date && !isNaN(focalDate.getTime())) ? focalDate : null;
         const nextStep = [...ZOOM_STEPS].reverse().find((step) => step < this.state.zoomLevel);
-        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], focalDate);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], validFocalDate);
     }
 
     setZoom(level, customFocalDate = null, customScrollY = null) {
@@ -2177,81 +2277,33 @@ export class AllInOneTimelineAction extends Component {
         this._isZooming = true;
 
         try {
-            // 1. Gather all tasks boundaries across current view
-            let projectMinStart = null;
-            let projectMaxEnd = null;
-            if (g.eachTask) {
-                g.eachTask((t) => {
-                    if (t.start_date) {
-                        const s = new Date(t.start_date);
-                        if (!isNaN(s.getTime()) && (!projectMinStart || s < projectMinStart)) {
-                            projectMinStart = s;
-                        }
-                    }
-                    if (t.end_date) {
-                        const e = new Date(t.end_date);
-                        if (!isNaN(e.getTime()) && (!projectMaxEnd || e > projectMaxEnd)) {
-                            projectMaxEnd = e;
-                        }
-                    }
-                });
-            }
-
             const visibleWidth = this.getTimelineVisibleWidth();
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
             const targetScrollY = (customScrollY !== null && customScrollY !== undefined) ? customScrollY : scrollState.y;
 
-            // 2. Identify the anchor date (focalDate)
-            let focalDate = customFocalDate;
+            // 1. Identify focal anchor date (valid Date only)
+            let focalDate = (customFocalDate instanceof Date && !isNaN(customFocalDate.getTime())) ? customFocalDate : null;
 
-            // Priority 1: Currently selected task or project row in Gantt
-            if (!focalDate) {
-                const selectedId = g.getSelectedId ? g.getSelectedId() : null;
-                if (selectedId && g.isTaskExists(selectedId)) {
-                    const selTask = g.getTask(selectedId);
-                    if (selTask.start_date && selTask.end_date) {
-                        focalDate = new Date((new Date(selTask.start_date).getTime() + new Date(selTask.end_date).getTime()) / 2);
-                    } else if (selTask.start_date) {
-                        focalDate = new Date(selTask.start_date);
-                    }
-                }
-            }
-
-            // Priority 2: What date is currently at the center of the user's viewport?
+            // If not explicitly provided (e.g. toolbar zoom buttons or scale dropdown), anchor to the visual center of current viewport
             if (!focalDate && g.dateFromPos) {
                 const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
                 const centerDate = g.dateFromPos(currentCenterPx);
-                if (centerDate && !isNaN(centerDate.getTime())) {
-                    if (projectMinStart && projectMaxEnd) {
-                        const bufMin = new Date(projectMinStart.getTime() - 180 * 86400000);
-                        const bufMax = new Date(projectMaxEnd.getTime() + 180 * 86400000);
-                        if (centerDate >= bufMin && centerDate <= bufMax) {
-                            focalDate = centerDate;
-                        }
-                    } else {
-                        focalDate = centerDate;
-                    }
+                if (centerDate instanceof Date && !isNaN(centerDate.getTime())) {
+                    focalDate = centerDate;
                 }
             }
 
-            // Priority 3: Center of project tasks or today
             if (!focalDate) {
-                if (projectMinStart && projectMaxEnd) {
-                    focalDate = new Date((projectMinStart.getTime() + projectMaxEnd.getTime()) / 2);
-                } else if (projectMinStart) {
-                    focalDate = new Date(projectMinStart);
-                } else {
-                    focalDate = new Date();
-                }
+                focalDate = new Date();
             }
 
-            // 3. Apply the new zoom level and reconfigure scale & range
+            // 2. Apply the new zoom level and reconfigure scale & range
             this.state.zoomLevel = level;
             this.applyScaleConfig();
             this.ensureTimelineRange(focalDate, focalDate);
             g.render();
 
-            // 4. Center viewport around focalDate
+            // 3. Center viewport smoothly around focalDate
             const centerOnFocal = () => {
                 if (focalDate && g.scrollTo) {
                     const newPos = this.safePosFromDate(focalDate);
@@ -2271,7 +2323,8 @@ export class AllInOneTimelineAction extends Component {
                 setTimeout(() => {
                     centerOnFocal();
                     this._isZooming = false;
-                }, 50);
+                    this.saveViewState();
+                }, 80);
             });
         } catch (err) {
             console.error("Error setting zoom:", err);
