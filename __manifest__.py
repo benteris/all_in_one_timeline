@@ -30,9 +30,11 @@ Pagrindinės funkcijos:
 * Dvikryptis elastinis slinkimas į praeitį ir ateitį be dirbtinių apribojimų.
 * Šiandienos vertikali žyma („ŠIANDIEN“).
 * Užduočių priklausomybių ryšiai (Finish-to-Start) su rodyklėmis.
+* Užrakintų (Locked) užduočių apsauga: blokuojamos užduotys negali turėti progreso (0%), automatinis progreso anuliavimas atvėrus pirmtakų užduotis.
+* Tiesioginis planuoto laiko (Allocated Time) sinchronizavimas su faktinėmis darbo valandomis (Darbo valandos) velkant tvarkaraštį.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "1.3",
+    "version": "1.4",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",

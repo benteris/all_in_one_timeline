@@ -1,12 +1,106 @@
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 from odoo import api, fields, models
 import logging
 
 _logger = logging.getLogger(__name__)
 
 
+def get_lithuanian_holidays(year):
+    """
+    Returns a set of date objects representing Lithuanian national public holidays for the given year.
+    Covers all fixed annual holidays plus movable Easter Sunday and Easter Monday.
+    """
+    fixed = {
+        (1, 1),    # Naujieji metai
+        (2, 16),   # Lietuvos valstybės atkūrimo diena
+        (3, 11),   # Lietuvos nepriklausomybės atkūrimo diena
+        (5, 1),    # Tarptautinė darbo diena
+        (6, 24),   # Rasos ir Joninių diena
+        (7, 6),    # Valstybės diena
+        (8, 15),   # Žolinė
+        (11, 1),   # Visų Šventųjų diena
+        (11, 2),   # Vėlinių diena
+        (12, 24),  # Kūčių diena
+        (12, 25),  # Kalėdų pirmoji diena
+        (12, 26),  # Kalėdų antroji diena
+    }
+    # Movable Easter (Gregorian Computus)
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    easter_month = (h + l - 7 * m + 114) // 31
+    easter_day = ((h + l - 7 * m + 114) % 31) + 1
+    easter_sunday = date(year, easter_month, easter_day)
+    easter_monday = easter_sunday + timedelta(days=1)
+
+    holidays = {date(year, mo, d) for (mo, d) in fixed}
+    holidays.add(easter_sunday)
+    holidays.add(easter_monday)
+    return holidays
+
+
+def calculate_lithuanian_working_hours(start_dt, end_dt):
+    """
+    Calculates actual working hours (8 hours per work day, 8:00 - 17:00)
+    excluding weekends (Saturday, Sunday) and Lithuanian national public holidays.
+    If end_dt is midnight (00:00:00) and represents a Gantt boundary ending the previous day,
+    the active work day is shifted to end_dt - 1 day.
+    """
+    if not start_dt or not end_dt:
+        return 0.0
+    s_date = start_dt.date() if isinstance(start_dt, datetime) else start_dt
+    if isinstance(end_dt, datetime):
+        e_date = end_dt.date()
+        if end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0 and e_date > s_date:
+            e_date = e_date - timedelta(days=1)
+    else:
+        e_date = end_dt
+    if e_date < s_date:
+        return 0.0
+
+    holidays = get_lithuanian_holidays(s_date.year)
+    if e_date.year != s_date.year:
+        holidays.update(get_lithuanian_holidays(e_date.year))
+
+    work_days = 0
+    curr = s_date
+    while curr <= e_date:
+        if curr.weekday() < 5 and curr not in holidays:
+            work_days += 1
+        curr += timedelta(days=1)
+
+    return float(work_days * 8)
+
+
 class ProjectTask(models.Model):
     _inherit = "project.task"
+
+    def _cascade_clear_downstream_progress(self):
+        """
+        When a task or parent task is not finished (reopened, waiting, in progress, etc.),
+        all dependent downstream tasks (dependent_ids) and child subtasks (child_ids)
+        must have their completion percentage cleared (progress = 0.0) and status
+        reset to waiting/locked (state = '04_waiting_normal').
+        Recursively cascades throughout the entire downstream dependency chain.
+        """
+        for task in self:
+            for dep in task.dependent_ids:
+                if dep.state == "1_done" or (dep.progress and dep.progress > 0):
+                    dep.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                    dep._cascade_clear_downstream_progress()
+            for child in task.child_ids:
+                if child.state == "1_done" or (child.progress and child.progress > 0):
+                    child.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                    child._cascade_clear_downstream_progress()
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -19,6 +113,21 @@ class ProjectTask(models.Model):
                         vals["state"] = "04_waiting_normal"
                 except Exception:
                     pass
+
+            # Auto-fill allocated_hours from actual working hours (darbo valandos)
+            if "allocated_hours" not in vals:
+                s = vals.get("planned_date_start")
+                e = vals.get("planned_date_end") or vals.get("date_deadline")
+                if s and e:
+                    try:
+                        s_dt = fields.Datetime.to_datetime(s) if isinstance(s, str) else s
+                        e_dt = fields.Datetime.to_datetime(e) if isinstance(e, str) else e
+                        w_h = calculate_lithuanian_working_hours(s_dt, e_dt)
+                        if w_h > 0:
+                            vals["allocated_hours"] = w_h
+                    except Exception:
+                        pass
+
         records = super().create(vals_list)
         for rec in records:
             if rec.milestone_id and rec.date_deadline:
@@ -43,7 +152,26 @@ class ProjectTask(models.Model):
                     vals["state"] = "01_in_progress"
             except Exception:
                 pass
+
+        # Auto-update allocated_hours from working hours (darbo valandos) if dates are modified
+        if ("planned_date_start" in vals or "planned_date_end" in vals) and "allocated_hours" not in vals:
+            for rec in self:
+                s_val = vals.get("planned_date_start") or rec.planned_date_start
+                e_val = vals.get("planned_date_end") or rec.planned_date_end or vals.get("date_deadline") or rec.date_deadline
+                if s_val and e_val:
+                    try:
+                        s_dt = fields.Datetime.to_datetime(s_val) if isinstance(s_val, str) else s_val
+                        e_dt = fields.Datetime.to_datetime(e_val) if isinstance(e_val, str) else e_val
+                        w_h = calculate_lithuanian_working_hours(s_dt, e_dt)
+                        if w_h > 0:
+                            vals["allocated_hours"] = w_h
+                    except Exception:
+                        pass
+                break
+
         res = super().write(vals)
+
+        # Milestone deadline check
         if "date_deadline" in vals or "milestone_id" in vals:
             for rec in self:
                 if rec.milestone_id and rec.date_deadline:
@@ -55,6 +183,17 @@ class ProjectTask(models.Model):
                             ms.sudo().write({"deadline": rec_dl})
                         except Exception:
                             pass
+
+        # If task state/progress changed to not done, clear downstream dependent tasks
+        for rec in self:
+            is_not_done = (
+                (rec.state and rec.state != "1_done")
+                or (rec.progress is not None and rec.progress < 100.0)
+                or (rec.stage_id and not getattr(rec.stage_id, "is_closed", False) and "done" not in (rec.stage_id.name or "").lower())
+            )
+            if is_not_done:
+                rec._cascade_clear_downstream_progress()
+
         return res
 
     @api.model
@@ -253,6 +392,17 @@ class ProjectTask(models.Model):
 
             t_start, t_end = get_task_dates(t)
 
+            # Auto-fill task allocated_hours directly from darbo valandos (working hours) if unset or 0.0
+            t_alloc = t.allocated_hours
+            if not t_alloc:
+                w_h = calculate_lithuanian_working_hours(t_start, t_end)
+                if w_h > 0:
+                    t_alloc = w_h
+                    try:
+                        t.sudo().write({"allocated_hours": w_h})
+                    except Exception:
+                        pass
+
             # Grid alignment for DHTMLX Gantt visual coordinates (midnight boundaries)
             gantt_start = datetime.combine(t_start.date(), time.min)
             if t_end.time() > time.min:
@@ -291,18 +441,39 @@ class ProjectTask(models.Model):
             elif getattr(t, "depend_on_count", 0) > getattr(t, "closed_depend_on_count", 0):
                 is_locked = True
 
+            # If parent task is locked or not finished and this is a subtask
+            if not is_locked and t.parent_id:
+                parent_m = get_task_metrics(t.parent_id)
+                if not parent_m.get("is_done") and t.parent_id.state != "1_done":
+                    if t.parent_id.depend_on_ids:
+                        for pdep in t.parent_id.depend_on_ids:
+                            pdep_m = get_task_metrics(pdep)
+                            if not pdep_m.get("is_done") and pdep.state != "1_done":
+                                is_locked = True
+                                blocking_tasks.append(pdep.name or f"Task #{pdep.id}")
+
             stage_name = (t.stage_id.name or "").lower() if t.stage_id else ""
             t_state = t.state or "01_in_progress"
 
-            if t_state == "1_canceled":
+            # CRITICAL: A locked task CAN NEVER be 100% or done!
+            # If parents or predecessor status changed, progress must clear and reflect 0%
+            if is_locked:
+                prog = 0.0
+                t_is_done = False
+                color = "#1e293b"  # Dark Charcoal Steel for locked tasks
+                t_state = "locked"
+                if (t.progress and t.progress > 0) or t.state == "1_done":
+                    try:
+                        t.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                    except Exception:
+                        pass
+            elif t_state == "1_canceled":
                 color = "#dc3545"  # Cancelled: red
             elif t_state == "1_done" or t_is_done:
                 color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
                 t_state = "1_done"
-            elif is_locked:
-                # LOCKED: Dark Charcoal Steel color with distinct lock styling
-                color = "#1e293b"
-                t_state = "locked"
+                t_is_done = True
+                prog = 1.0
             elif t_state == "03_approved":
                 color = "#10b981"  # Approved: just green
             elif t_state == "02_changes_requested":
@@ -317,7 +488,7 @@ class ProjectTask(models.Model):
                 color = "#71639e"
                 t_state = "01_in_progress"
 
-            allocated_str = f"{round(t.allocated_hours, 1)}h" if t.allocated_hours else ""
+            allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
 
             # Deadline and Delay Calculation
             deadline_str = False
@@ -364,9 +535,10 @@ class ProjectTask(models.Model):
                 "has_deadline": has_deadline,
                 "has_deadline_delay": has_deadline_delay,
                 "delay_days": delay_days,
-                "progress": round(prog, 2),
-                "progress_percent": round(prog * 100, 1),
+                "progress": 0.0 if is_locked else round(prog, 2),
+                "progress_percent": 0 if is_locked else round(prog * 100, 1),
                 "allocated_hours": allocated_str,
+                "allocated_hours_raw": t_alloc or 0.0,
                 "effective_hours": f"{round(t.effective_hours, 1)}h" if t.effective_hours else "",
                 "assignees": assignee_names,
                 "assignee_avatars": avatars,
@@ -382,7 +554,7 @@ class ProjectTask(models.Model):
                 "blocking_tasks": ", ".join(blocking_tasks),
                 "is_project": False,
                 "is_milestone": False,
-                "is_done": bool(t_is_done),
+                "is_done": False if is_locked else bool(t_is_done),
                 "readonly": False,
             }
 
@@ -456,6 +628,19 @@ class ProjectTask(models.Model):
 
             # Project Progress & Completion:
             total_allocated = sum(p_tasks.mapped("allocated_hours") or [0.0])
+
+            # Auto-fill project allocated_hours from darbo valandos if unset or 0.0
+            p_alloc = p.allocated_hours
+            if not p_alloc:
+                p_work_hours = calculate_lithuanian_working_hours(p_start, p_end)
+                if p_work_hours > 0:
+                    p_alloc = p_work_hours
+                    try:
+                        p.sudo().write({"allocated_hours": p_work_hours})
+                    except Exception:
+                        pass
+
+            display_proj_alloc = p_alloc or total_allocated
             p_stage_name = (p.stage_id.name or "").lower() if hasattr(p, "stage_id") and p.stage_id else ""
             p_self_done = bool("done" in p_stage_name or "closed" in p_stage_name or "completed" in p_stage_name or (getattr(p.stage_id, "is_closed", False) if hasattr(p, "stage_id") and p.stage_id else False))
 
@@ -563,7 +748,8 @@ class ProjectTask(models.Model):
                 "delay_days": p_delay_days,
                 "progress": round(p_prog, 2),
                 "progress_percent": round(p_prog * 100, 1),
-                "allocated_hours": f"{round(total_allocated, 1)}h" if total_allocated else "",
+                "allocated_hours": f"{round(display_proj_alloc, 1)}h" if display_proj_alloc else "",
+                "allocated_hours_raw": p_alloc or 0.0,
                 "assignees": p.user_id.name or "",
                 "assignee_avatars": [
                     {
@@ -820,13 +1006,18 @@ class ProjectTask(models.Model):
                     proj = project_model.browse(p_id)
                     if proj.exists():
                         vals = {}
+                        d_start = fields.Date.to_date(start_date) if start_date else proj.date_start
+                        d_end = fields.Date.to_date(end_date) if end_date else proj.date
                         if start_date:
-                            vals["date_start"] = fields.Date.to_date(start_date)
+                            vals["date_start"] = d_start
                         if end_date:
-                            d_end = fields.Date.to_date(end_date)
                             vals["date"] = d_end
                             if hasattr(proj, "date_deadline") and (not proj.date_deadline or (proj.date and proj.date_deadline == proj.date)):
                                 vals["date_deadline"] = d_end
+                        if d_start and d_end:
+                            p_w_hours = calculate_lithuanian_working_hours(d_start, d_end)
+                            if p_w_hours > 0:
+                                vals["allocated_hours"] = p_w_hours
                         if vals:
                             proj.write(vals)
                 except Exception as e:
@@ -876,16 +1067,38 @@ class ProjectTask(models.Model):
                 task = self.browse(t_id)
                 if task.exists():
                     vals = {}
+                    dt_start = fields.Datetime.to_datetime(start_date) if start_date else task.planned_date_start
+                    dt_end = fields.Datetime.to_datetime(end_date) if end_date else (task.planned_date_end or task.date_deadline)
                     if start_date:
-                        vals["planned_date_start"] = fields.Datetime.to_datetime(start_date)
+                        vals["planned_date_start"] = dt_start
                     if end_date:
-                        dt_end = fields.Datetime.to_datetime(end_date)
                         vals["planned_date_end"] = dt_end
                         # Only update date_deadline if it was unset or if it was synchronized with planned_date_end
                         if not task.date_deadline or (task.planned_date_end and task.date_deadline.date() == task.planned_date_end.date()):
                             vals["date_deadline"] = dt_end
-                    if progress is not None:
-                        vals["progress"] = min(100.0, max(0.0, float(progress) * 100.0))
+
+                    if dt_start and dt_end:
+                        t_w_hours = calculate_lithuanian_working_hours(dt_start, dt_end)
+                        if t_w_hours > 0:
+                            vals["allocated_hours"] = t_w_hours
+
+                    # Check if task is locked by uncompleted dependencies
+                    is_locked = False
+                    if task.depend_on_ids:
+                        for dep in task.depend_on_ids:
+                            if dep.state != "1_done" and (not dep.progress or dep.progress < 100.0):
+                                is_locked = True
+                                break
+
+                    if is_locked:
+                        vals["progress"] = 0.0
+                        vals["state"] = "04_waiting_normal"
+                    elif progress is not None:
+                        p_float = min(100.0, max(0.0, float(progress) * 100.0))
+                        vals["progress"] = p_float
+                        if p_float < 100.0:
+                            task._cascade_clear_downstream_progress()
+
                     if vals:
                         task.write(vals)
             except Exception as e:

@@ -645,7 +645,8 @@ export class AllInOneTimelineAction extends Component {
 
             const startStr = g.templates.tooltip_date_format(effStart);
             const endStr = g.templates.tooltip_date_format(effEnd);
-            const percent = Math.round((task.progress || 0) * 100);
+            const isItemLocked = task.is_locked || task.state === "locked";
+            const percent = isItemLocked ? 0 : Math.round((task.progress || 0) * 100);
             const { workDays, workHours, calendarDays } = calculateWorkingDaysAndHours(effStart, effEnd);
             const durationDisplay = calendarDays || task.duration || 1;
 
@@ -821,15 +822,16 @@ export class AllInOneTimelineAction extends Component {
 
         // Task Bar Text & Progress Template (Reflects progress directly in the line itself and renders deadline delay bar)
         g.templates.task_text = (start, end, task) => {
-            const percent = Math.round((task.progress || 0) * 100);
-            const isDone = task.is_done || percent >= 100 || task.state === "1_done";
-            const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : "bar_prog_badge";
+            const isLocked = task.is_locked || task.state === "locked";
+            const percent = isLocked ? 0 : Math.round((task.progress || 0) * 100);
+            const isDone = !isLocked && (task.is_done || percent >= 100 || task.state === "1_done");
+            const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : (isLocked ? "bar_prog_badge bar_prog_locked" : "bar_prog_badge");
 
             // Status icon: Locked gets a padlock, Done gets a checkmark, Changes Requested gets an exclamation triangle,
             // Cancelled gets a cross, Waiting gets a clock.
             // Approved gets NO checkmark (just solid green as requested).
             let statusIcon = "";
-            if (task.is_locked || task.state === "locked") {
+            if (isLocked) {
                 statusIcon = `<i class="fa fa-lock text-warning me-1"></i>`;
             } else if (isDone) {
                 statusIcon = `<i class="fa fa-check me-1"></i>`;
@@ -1399,11 +1401,16 @@ export class AllInOneTimelineAction extends Component {
                 task.planned_date_end = formatOdooDateTime(workEnd);
             }
 
+            // Real-time update of allocated working hours from darbo valandos
+            const workCalc = calculateWorkingDaysAndHours(workStart, workEnd);
+            task.allocated_hours = `${workCalc.workHours}h`;
+
             updates.push({
                 id: task.id,
                 start_date: formatOdooDateTime(workStart),
                 end_date: formatOdooDateTime(workEnd),
                 progress: task.progress,
+                allocated_hours: workCalc.workHours,
             });
 
             if (mode === "move") {
@@ -1424,12 +1431,15 @@ export class AllInOneTimelineAction extends Component {
                                 childTask.planned_date_start = formatOdooDateTime(cWork.workStart);
                                 childTask.planned_date_end = formatOdooDateTime(cWork.workEnd);
                             }
+                            const cWorkCalc = calculateWorkingDaysAndHours(cWork.workStart, cWork.workEnd);
+                            childTask.allocated_hours = `${cWorkCalc.workHours}h`;
 
                             updates.push({
                                 id: childTask.id,
                                 start_date: formatOdooDateTime(cWork.workStart),
                                 end_date: formatOdooDateTime(cWork.workEnd),
                                 progress: childTask.progress,
+                                allocated_hours: cWorkCalc.workHours,
                             });
                             delete childTask._drag_start_origin;
                             delete childTask._drag_end_origin;
