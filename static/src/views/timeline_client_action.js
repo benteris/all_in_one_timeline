@@ -472,6 +472,7 @@ export class AllInOneTimelineAction extends Component {
         g.config.readonly = false;
         g.config.tooltip_timeout = 250;
         g.config.tooltip_hide_timeout = 30;
+        g.config.show_errors = false;
 
         // Columns in Left Tree Grid (Only Task and Assignee columns)
         g.config.columns = [
@@ -760,8 +761,8 @@ export class AllInOneTimelineAction extends Component {
                 if (task && task.start_date) {
                     const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
                     const visibleWidth = dataArea ? dataArea.clientWidth : 800;
-                    if (g.posFromDate && g.scrollTo) {
-                        const pos = g.posFromDate(new Date(task.start_date));
+                    if (g.scrollTo) {
+                        const pos = this.safePosFromDate(task.start_date);
                         if (pos >= 0) {
                             const targetX = Math.max(0, pos - Math.floor(visibleWidth / 2));
                             const currentY = g.getScrollState ? g.getScrollState().y : 0;
@@ -908,18 +909,20 @@ export class AllInOneTimelineAction extends Component {
                         : (task._drag_start_origin && Math.abs(task.start_date.getTime() - task._drag_start_origin.getTime()) > 0);
 
                     if (isStartHandle) {
-                        const currentPx = g.posFromDate(task.start_date);
+                        const currentPx = this.safePosFromDate(task.start_date);
                         let bestDiff = Infinity;
                         let bestMs = null;
                         let bestTargetPx = null;
 
                         for (const targetMs of this._snapTargetTimestamps) {
-                            const targetPx = g.posFromDate(new Date(targetMs));
-                            const diff = Math.abs(currentPx - targetPx);
-                            if (diff <= SNAP_THRESHOLD_PX && diff < bestDiff) {
-                                bestDiff = diff;
-                                bestMs = targetMs;
-                                bestTargetPx = targetPx;
+                            const targetPx = this.safePosFromDate(new Date(targetMs));
+                            if (targetPx >= 0 && currentPx >= 0) {
+                                const diff = Math.abs(currentPx - targetPx);
+                                if (diff <= SNAP_THRESHOLD_PX && diff < bestDiff) {
+                                    bestDiff = diff;
+                                    bestMs = targetMs;
+                                    bestTargetPx = targetPx;
+                                }
                             }
                         }
 
@@ -932,18 +935,20 @@ export class AllInOneTimelineAction extends Component {
                         }
                     } else {
                         // Resizing end handle
-                        const currentPx = g.posFromDate(task.end_date);
+                        const currentPx = this.safePosFromDate(task.end_date);
                         let bestDiff = Infinity;
                         let bestMs = null;
                         let bestTargetPx = null;
 
                         for (const targetMs of this._snapTargetTimestamps) {
-                            const targetPx = g.posFromDate(new Date(targetMs));
-                            const diff = Math.abs(currentPx - targetPx);
-                            if (diff <= SNAP_THRESHOLD_PX && diff < bestDiff) {
-                                bestDiff = diff;
-                                bestMs = targetMs;
-                                bestTargetPx = targetPx;
+                            const targetPx = this.safePosFromDate(new Date(targetMs));
+                            if (targetPx >= 0 && currentPx >= 0) {
+                                const diff = Math.abs(currentPx - targetPx);
+                                if (diff <= SNAP_THRESHOLD_PX && diff < bestDiff) {
+                                    bestDiff = diff;
+                                    bestMs = targetMs;
+                                    bestTargetPx = targetPx;
+                                }
                             }
                         }
 
@@ -979,8 +984,8 @@ export class AllInOneTimelineAction extends Component {
                     const origDurationMs = task._drag_end_origin && task._drag_start_origin
                         ? (task._drag_end_origin.getTime() - task._drag_start_origin.getTime())
                         : (task.end_date.getTime() - task.start_date.getTime());
-                    const startPx = g.posFromDate(task.start_date);
-                    const endPx = g.posFromDate(task.end_date);
+                    const startPx = this.safePosFromDate(task.start_date);
+                    const endPx = this.safePosFromDate(task.end_date);
 
                     let bestDiff = Infinity;
                     let bestType = null;
@@ -988,22 +993,26 @@ export class AllInOneTimelineAction extends Component {
                     let bestTargetPx = null;
 
                     for (const targetMs of this._snapTargetTimestamps) {
-                        const targetPx = g.posFromDate(new Date(targetMs));
+                        const targetPx = this.safePosFromDate(new Date(targetMs));
 
-                        const diffStart = Math.abs(startPx - targetPx);
-                        if (diffStart <= SNAP_THRESHOLD_PX && diffStart < bestDiff) {
-                            bestDiff = diffStart;
-                            bestType = "start";
-                            bestMs = targetMs;
-                            bestTargetPx = targetPx;
+                        if (targetPx >= 0 && startPx >= 0) {
+                            const diffStart = Math.abs(startPx - targetPx);
+                            if (diffStart <= SNAP_THRESHOLD_PX && diffStart < bestDiff) {
+                                bestDiff = diffStart;
+                                bestType = "start";
+                                bestMs = targetMs;
+                                bestTargetPx = targetPx;
+                            }
                         }
 
-                        const diffEnd = Math.abs(endPx - targetPx);
-                        if (diffEnd <= SNAP_THRESHOLD_PX && diffEnd < bestDiff) {
-                            bestDiff = diffEnd;
-                            bestType = "end";
-                            bestMs = targetMs;
-                            bestTargetPx = targetPx;
+                        if (targetPx >= 0 && endPx >= 0) {
+                            const diffEnd = Math.abs(endPx - targetPx);
+                            if (diffEnd <= SNAP_THRESHOLD_PX && diffEnd < bestDiff) {
+                                bestDiff = diffEnd;
+                                bestType = "end";
+                                bestMs = targetMs;
+                                bestTargetPx = targetPx;
+                            }
                         }
                     }
 
@@ -1310,6 +1319,26 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
+     * Safely calculate pixel X position from date without throwing dhtmlx "Invalid day index" assertions
+     */
+    safePosFromDate(date) {
+        if (!this.gantt || !date) return -1;
+        const g = this.gantt;
+        const d = date instanceof Date ? date : new Date(date);
+        if (isNaN(d.getTime())) return -1;
+        const state = g.getState ? g.getState() : {};
+        const min = state.min_date || g.config.start_date;
+        const max = state.max_date || g.config.end_date;
+        if (min && d < min) return -1;
+        if (max && d > max) return -1;
+        try {
+            return g.posFromDate ? g.posFromDate(d) : -1;
+        } catch {
+            return -1;
+        }
+    }
+
+    /**
      * Applies timeframe scales: Diena, Savaitė, Mėnuo, Metai
      * Translates months & weekdays to Lithuanian, marks weekends (#f1f3f7) and national holidays.
      */
@@ -1532,10 +1561,10 @@ export class AllInOneTimelineAction extends Component {
                         }
                     }
                 }
-                if (firstTaskStart && this.gantt.posFromDate && this.gantt.scrollTo) {
+                if (firstTaskStart && this.gantt.scrollTo) {
                     const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
                     const visibleWidth = dataArea ? dataArea.clientWidth : 800;
-                    const pos = this.gantt.posFromDate(firstTaskStart);
+                    const pos = this.safePosFromDate(firstTaskStart);
                     if (pos >= 0) {
                         this.gantt.scrollTo(Math.max(0, pos - Math.floor(visibleWidth / 3)), 0);
                     }
@@ -1702,13 +1731,19 @@ export class AllInOneTimelineAction extends Component {
         let minDate = null;
         let maxDate = null;
 
-        if (extraTaskStart && extraTaskStart instanceof Date && !isNaN(extraTaskStart.getTime())) {
-            minDate = new Date(extraTaskStart);
-            maxDate = new Date(extraTaskStart);
+        if (extraTaskStart) {
+            const s = extraTaskStart instanceof Date ? extraTaskStart : new Date(extraTaskStart);
+            if (!isNaN(s.getTime())) {
+                minDate = new Date(s);
+                maxDate = new Date(s);
+            }
         }
-        if (extraTaskEnd && extraTaskEnd instanceof Date && !isNaN(extraTaskEnd.getTime())) {
-            if (!minDate || extraTaskEnd < minDate) minDate = new Date(extraTaskEnd);
-            if (!maxDate || extraTaskEnd > maxDate) maxDate = new Date(extraTaskEnd);
+        if (extraTaskEnd) {
+            const e = extraTaskEnd instanceof Date ? extraTaskEnd : new Date(extraTaskEnd);
+            if (!isNaN(e.getTime())) {
+                if (!minDate || e < minDate) minDate = new Date(e);
+                if (!maxDate || e > maxDate) maxDate = new Date(e);
+            }
         }
 
         if (g.eachTask) {
@@ -1733,13 +1768,13 @@ export class AllInOneTimelineAction extends Component {
         if (!minDate) minDate = new Date(today);
         if (!maxDate) maxDate = new Date(today);
 
-        // Include today in boundaries if within 1 year so today marker is reachable
+        // Always include today in boundaries so today line is within scale
         let effectiveMin = new Date(minDate);
         let effectiveMax = new Date(maxDate);
-        if (today < effectiveMin && (effectiveMin.getTime() - today.getTime()) < 365 * 86400000) {
+        if (today < effectiveMin) {
             effectiveMin = new Date(today);
         }
-        if (today > effectiveMax && (today.getTime() - effectiveMax.getTime()) < 365 * 86400000) {
+        if (today > effectiveMax) {
             effectiveMax = new Date(today);
         }
 
@@ -1752,17 +1787,11 @@ export class AllInOneTimelineAction extends Component {
             endDate = new Date(effectiveMax.getFullYear() + 1, 11, 31, 23, 59, 59);
         } else if (this.state.zoomLevel < 35) {
             // 20% - 25%: Months as numbers
-            startDate = new Date(effectiveMin.getFullYear(), Math.max(0, effectiveMin.getMonth() - 2), 1, 0, 0, 0);
-            if (effectiveMin.getMonth() < 2) {
-                startDate = new Date(effectiveMin.getFullYear() - 1, 9, 1, 0, 0, 0);
-            }
-            endDate = new Date(effectiveMax.getFullYear(), Math.min(11, effectiveMax.getMonth() + 3), 0, 23, 59, 59);
-            if (effectiveMax.getMonth() >= 9) {
-                endDate = new Date(effectiveMax.getFullYear() + 1, 2, 31, 23, 59, 59);
-            }
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 3, 1, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 4, 0, 23, 59, 59);
         } else if (this.state.zoomLevel < 65) {
             // 35% - 50%: Weeks
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 1, 1, 0, 0, 0);
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 2, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 3, 0, 23, 59, 59);
         } else {
             // Detailed zoom (>= 65%): Days
@@ -1793,8 +1822,8 @@ export class AllInOneTimelineAction extends Component {
             g.config.start_date = newStart;
             g.render();
 
-            const addedPx = g.posFromDate ? g.posFromDate(oldStart) : 0;
-            const newScrollX = Math.max(0, scrollState.x + addedPx - stepPx);
+            const addedPx = this.safePosFromDate(oldStart);
+            const newScrollX = Math.max(0, scrollState.x + (addedPx > 0 ? addedPx : 0) - stepPx);
             g.scrollTo(newScrollX, scrollState.y);
             this.renderTodayMarker();
         } finally {
@@ -1841,7 +1870,7 @@ export class AllInOneTimelineAction extends Component {
         let marker = dataArea.querySelector(".custom_today_marker");
         try {
             const today = new Date();
-            const leftPos = g.posFromDate(today);
+            const leftPos = this.safePosFromDate(today);
             if (leftPos >= 0) {
                 if (!marker) {
                     marker = document.createElement("div");
@@ -2021,13 +2050,13 @@ export class AllInOneTimelineAction extends Component {
             // 3. Apply the new zoom level and reconfigure scale & range
             this.state.zoomLevel = level;
             this.applyScaleConfig();
-            this.ensureTimelineRange();
+            this.ensureTimelineRange(focalDate, focalDate);
             g.render();
 
             // 4. Center viewport around focalDate
             const centerOnFocal = () => {
-                if (focalDate && g.posFromDate && g.scrollTo) {
-                    const newPos = g.posFromDate(focalDate);
+                if (focalDate && g.scrollTo) {
+                    const newPos = this.safePosFromDate(focalDate);
                     if (newPos >= 0) {
                         const currentVisWidth = dataArea && dataArea.clientWidth > 50 ? dataArea.clientWidth : visibleWidth;
                         const targetScrollX = Math.max(0, newPos - Math.floor(currentVisWidth / 2));
@@ -2058,13 +2087,13 @@ export class AllInOneTimelineAction extends Component {
         today.setHours(0, 0, 0, 0);
         const state = this.gantt.getState ? this.gantt.getState() : {};
         if (!state.min_date || !state.max_date || today < state.min_date || today > state.max_date) {
-            this.ensureTimelineRange();
+            this.ensureTimelineRange(today, today);
             this.gantt.render();
         }
 
         const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
         const visibleWidth = dataArea ? dataArea.clientWidth : 800;
-        const todayPx = this.gantt.posFromDate ? this.gantt.posFromDate(today) : -1;
+        const todayPx = this.safePosFromDate(today);
 
         if (todayPx >= 0 && this.gantt.scrollTo) {
             const targetX = Math.max(0, todayPx - Math.floor(visibleWidth / 2));
