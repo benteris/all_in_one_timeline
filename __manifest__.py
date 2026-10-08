@@ -32,9 +32,10 @@ Pagrindinės funkcijos:
 * Užduočių priklausomybių ryšiai (Finish-to-Start) su rodyklėmis.
 * Užrakintų (Locked) užduočių apsauga: blokuojamos užduotys negali turėti progreso (0%), automatinis progreso anuliavimas atvėrus pirmtakų užduotis.
 * Tiesioginis planuoto laiko (Allocated Time) sinchronizavimas su faktinėmis darbo valandomis (Darbo valandos) velkant tvarkaraštį.
+* Detalus valandinis mastelis (300%, 400%, 500%) su darbo valandų (8:00 - 17:00) vizualiniu išskyrimu ir valandinių užduočių vilkimu realiuoju laiku.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "1.4",
+    "version": "1.5",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",

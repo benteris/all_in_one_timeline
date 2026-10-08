@@ -208,6 +208,18 @@
             font-weight: 700 !important;
         }
 
+        &.work_hour_scale_cell {
+            background-color: #f1f5f9 !important;
+            color: #0f172a !important;
+            font-weight: 700 !important;
+        }
+
+        &.off_hour_scale_cell {
+            background-color: #f8fafc !important;
+            color: #94a3b8 !important;
+            font-weight: 500 !important;
+        }
+
         .holiday_day_cell {
             color: #c82333;
             font-weight: 700;
@@ -297,6 +309,18 @@
 
         &.today_cell {
             background-color: rgba(113, 99, 158, 0.08) !important;
+        }
+
+        &.today_hour_cell {
+            background-color: rgba(113, 99, 158, 0.06) !important;
+        }
+
+        &.off_hours_cell {
+            background-color: #f8fafc !important;
+        }
+
+        &.work_hours_cell {
+            background-color: #ffffff !important;
         }
     }
 
@@ -391,6 +415,14 @@
                     background-color: rgba(255, 255, 255, 0.25);
                     border-color: rgba(255, 255, 255, 0.7);
                 }
+            }
+
+            .bar_hours_badge {
+                font-size: 10px;
+                font-weight: 600;
+                opacity: 0.92;
+                margin-left: 4px;
+                color: rgba(255, 255, 255, 0.95);
             }
         }
 

@@ -64,8 +64,11 @@
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(75)">75% – Keli mėnesiai</a></li>
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(100)">100% – Normalus (Dienomis)</a></li>
                                         <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(150)">150% – Padidintas</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(200)">200% – Labai didelis</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(250)">250% – Maksimalus</a></li>
+                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(250)">250% – Maksimalus (Dienomis)</a></li>
+                                        <li><hr class="dropdown-divider"/></li>
+                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(300)"><i class="fa fa-clock-o me-1"/>300% – Valandinis (2 val.)</a></li>
+                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(400)"><i class="fa fa-clock-o me-1"/>400% – Valandinis (1 val.)</a></li>
+                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(500)"><i class="fa fa-clock-o me-1"/>500% – Valandinis detalus (1 val. platus)</a></li>
                                     </ul>
                                 </div>
                                 <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomIn" title="Didinti / Zoom In">

@@ -41,10 +41,13 @@ export const LITHUANIAN_MONTHS_SHORT = [
     "Gru",
 ];
 
-export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250];
+export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250, 300, 400, 500];
 export const TIMELINE_VIEW_STATE_KEY = "all_in_one_timeline_viewport_state";
 
 export const ZOOM_PX_PER_DAY = {
+    500: 24 * 60,
+    400: 24 * 40,
+    300: 24 * 24,
     250: 80,
     200: 64,
     150: 48,
@@ -222,19 +225,71 @@ export function calculateWorkingDaysAndHours(startDate, endDate) {
         endDay.setDate(endDay.getDate() - 1);
     }
 
-    let workDays = 0;
+    const isSingleDay = (s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate());
+    const isFullDayStd = (s.getHours() === 8 && s.getMinutes() === 0 && e.getHours() === 17 && e.getMinutes() === 0) || (s.getHours() === 0 && e.getHours() === 0);
+
+    let totalWorkHours = 0;
+    let totalWorkDays = 0;
     let totalCalendarDays = 0;
     const curr = new Date(startDay);
 
     while (curr <= endDay) {
         totalCalendarDays++;
         if (!isWeekend(curr) && !getLithuanianHoliday(curr)) {
-            workDays++;
+            const dayWorkStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 8, 0, 0);
+            const dayWorkEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 17, 0, 0);
+
+            if (isSingleDay) {
+                if (isFullDayStd || (s <= dayWorkStart && e >= dayWorkEnd)) {
+                    totalWorkHours += 8.0;
+                    totalWorkDays += 1;
+                } else {
+                    const actStart = s > dayWorkStart ? s : dayWorkStart;
+                    const actEnd = e < dayWorkEnd ? e : dayWorkEnd;
+                    if (actEnd > actStart) {
+                        const h = (actEnd.getTime() - actStart.getTime()) / 3600000;
+                        const roundedH = (h >= 8.9 ? 8.0 : Math.round(h * 100) / 100);
+                        totalWorkHours += roundedH;
+                        totalWorkDays += (roundedH >= 8 ? 1 : Math.round((roundedH / 8) * 10) / 10);
+                    }
+                }
+            } else if (curr.getTime() === startDay.getTime()) {
+                if (s <= dayWorkStart) {
+                    totalWorkHours += 8.0;
+                    totalWorkDays += 1;
+                } else {
+                    const actStart = s > dayWorkStart ? s : dayWorkStart;
+                    if (dayWorkEnd > actStart) {
+                        const h = (dayWorkEnd.getTime() - actStart.getTime()) / 3600000;
+                        const roundedH = Math.round(Math.min(8.0, h) * 100) / 100;
+                        totalWorkHours += roundedH;
+                        totalWorkDays += Math.round((roundedH / 8) * 10) / 10;
+                    }
+                }
+            } else if (curr.getTime() === endDay.getTime()) {
+                if (e >= dayWorkEnd) {
+                    totalWorkHours += 8.0;
+                    totalWorkDays += 1;
+                } else {
+                    const actEnd = e < dayWorkEnd ? e : dayWorkEnd;
+                    if (actEnd > dayWorkStart) {
+                        const h = (actEnd.getTime() - dayWorkStart.getTime()) / 3600000;
+                        const roundedH = Math.round(Math.min(8.0, h) * 100) / 100;
+                        totalWorkHours += roundedH;
+                        totalWorkDays += Math.round((roundedH / 8) * 10) / 10;
+                    }
+                }
+            } else {
+                totalWorkHours += 8.0;
+                totalWorkDays += 1;
+            }
         }
         curr.setDate(curr.getDate() + 1);
     }
 
-    const workHours = workDays * 8;
+    const workHours = Math.round(totalWorkHours * 10) / 10;
+    const workDays = workHours >= 8 && Number.isInteger(workHours / 8) ? (workHours / 8) : Math.round(totalWorkDays * 10) / 10;
+
     return {
         workDays,
         workHours,
@@ -246,6 +301,7 @@ export function calculateWorkingDaysAndHours(startDate, endDate) {
  * Computes standard business work dates (08:00:00 - 17:00:00) from Gantt grid dates.
  * Gantt visual dates represent intervals [startDay 00:00:00, endDayBoundary 00:00:00).
  * If endDayBoundary is at 00:00:00 and > startDay, the last active work day is endDayBoundary - 1 day.
+ * If start/end dates already contain specific intra-day hours (e.g. 10:00, 14:00), preserves them directly!
  */
 export function computeWorkDates(startDate, endDate) {
     if (!startDate || !endDate) {
@@ -262,6 +318,12 @@ export function computeWorkDates(startDate, endDate) {
             workStart: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 8, 0, 0),
             workEnd: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 17, 0, 0),
         };
+    }
+
+    // Preserve intra-day specific hours if already present
+    const hasSpecificHours = (s.getHours() !== 0 || s.getMinutes() !== 0 || (e.getHours() !== 0 && e.getHours() !== 23) || e.getMinutes() !== 0);
+    if (hasSpecificHours && s < e) {
+        return { workStart: new Date(s), workEnd: new Date(e) };
     }
 
     const workStart = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 8, 0, 0);
@@ -518,6 +580,7 @@ export class AllInOneTimelineAction extends Component {
 
         const g = this.gantt;
         window.activeGantt = this.gantt;
+        window.activeGanttAction = this;
 
         // Configure Lithuanian locale safely without touching g.date functions
         if (g.locale && g.locale.date) {
@@ -882,9 +945,11 @@ export class AllInOneTimelineAction extends Component {
                 }
             }
 
+            const hoursBadge = task.allocated_hours ? ` <span class="bar_hours_badge">(${task.allocated_hours})</span>` : "";
+
             return `
                 <span class="bar_content_wrapper">
-                    <span class="bar_text">${statusIcon}${task.text}</span>
+                    <span class="bar_text">${statusIcon}${task.text}${hoursBadge}</span>
                     <span class="${badgeClass}">${percent}%</span>
                 </span>
                 ${delayBarHtml}
@@ -945,12 +1010,29 @@ export class AllInOneTimelineAction extends Component {
             return tClass + extraClass;
         };
 
-        // Mark Today, Weekends, and Lithuanian National Holidays in Timeline Background Cells
+        // Mark Today, Weekends, Lithuanian National Holidays, and Work Hours in Timeline Background Cells
         g.templates.timeline_cell_class = (task, date) => {
             const today = new Date();
-            today.setHours(0, 0, 0, 0);
             const d = new Date(date);
-            d.setHours(0, 0, 0, 0);
+            const isToday = (
+                d.getFullYear() === today.getFullYear() &&
+                d.getMonth() === today.getMonth() &&
+                d.getDate() === today.getDate()
+            );
+            const hol = getLithuanianHoliday(d);
+            const wknd = isWeekend(d);
+
+            if (this.state.zoomLevel >= 300) {
+                const hour = d.getHours();
+                const isWorkHour = (hour >= 8 && hour < 17 && !hol && !wknd);
+                const classes = [];
+                if (isToday) classes.push("today_cell today_hour_cell");
+                if (hol) classes.push("holiday_cell");
+                else if (wknd) classes.push("weekend_cell");
+                else if (!isWorkHour) classes.push("off_hours_cell");
+                else classes.push("work_hours_cell");
+                return classes.join(" ");
+            }
 
             const isMacroTimeline = this.state.zoomLevel < 65;
             if (isMacroTimeline) {
@@ -974,21 +1056,14 @@ export class AllInOneTimelineAction extends Component {
                 return "";
             }
 
-            const isToday = (
-                d.getFullYear() === today.getFullYear() &&
-                d.getMonth() === today.getMonth() &&
-                d.getDate() === today.getDate()
-            );
-
             const classes = [];
             if (isToday) {
                 classes.push("today_cell");
             }
 
-            const hol = getLithuanianHoliday(d);
             if (hol) {
                 classes.push("holiday_cell");
-            } else if (isWeekend(d)) {
+            } else if (wknd) {
                 classes.push("weekend_cell");
             }
 
@@ -1376,11 +1451,32 @@ export class AllInOneTimelineAction extends Component {
                 delete task._fixed_parent;
             }
 
-            // Normalize task dates to clean midnight boundaries on the Gantt grid
-            task.start_date = new Date(task.start_date.getFullYear(), task.start_date.getMonth(), task.start_date.getDate(), 0, 0, 0);
-            task.end_date = new Date(task.end_date.getFullYear(), task.end_date.getMonth(), task.end_date.getDate(), 0, 0, 0);
-            if (task.end_date.getTime() <= task.start_date.getTime()) {
-                task.end_date = new Date(task.start_date.getTime() + 86400000);
+            const isHourlyMode = (this.state.zoomLevel >= 300);
+            let workStart, workEnd;
+
+            if (isHourlyMode) {
+                // In hourly view (300% - 500%), preserve exact dragged/resized hours
+                const sDate = new Date(task.start_date);
+                const eDate = new Date(task.end_date);
+                sDate.setSeconds(0, 0);
+                eDate.setSeconds(0, 0);
+                if (eDate.getTime() <= sDate.getTime()) {
+                    eDate.setTime(sDate.getTime() + 3600000); // at least 1 hour
+                }
+                task.start_date = sDate;
+                task.end_date = eDate;
+                workStart = new Date(sDate);
+                workEnd = new Date(eDate);
+            } else {
+                // Normalize task dates to clean midnight boundaries on the Gantt grid
+                task.start_date = new Date(task.start_date.getFullYear(), task.start_date.getMonth(), task.start_date.getDate(), 0, 0, 0);
+                task.end_date = new Date(task.end_date.getFullYear(), task.end_date.getMonth(), task.end_date.getDate(), 0, 0, 0);
+                if (task.end_date.getTime() <= task.start_date.getTime()) {
+                    task.end_date = new Date(task.start_date.getTime() + 86400000);
+                }
+                const computed = computeWorkDates(task.start_date, task.end_date);
+                workStart = computed.workStart;
+                workEnd = computed.workEnd;
             }
 
             delete task._magnetically_snapped_start;
@@ -1388,7 +1484,6 @@ export class AllInOneTimelineAction extends Component {
             delete task._is_dragged;
 
             const updates = [];
-            const { workStart, workEnd } = computeWorkDates(task.start_date, task.end_date);
             task.work_start_date = formatOdooDateTime(workStart);
             task.work_end_date = formatOdooDateTime(workEnd);
             if (task.is_milestone) {
@@ -1414,25 +1509,38 @@ export class AllInOneTimelineAction extends Component {
                     for (const childId of children) {
                         const childTask = g.getTask(childId);
                         if (childTask) {
-                            childTask.start_date = new Date(childTask.start_date.getFullYear(), childTask.start_date.getMonth(), childTask.start_date.getDate(), 0, 0, 0);
-                            childTask.end_date = new Date(childTask.end_date.getFullYear(), childTask.end_date.getMonth(), childTask.end_date.getDate(), 0, 0, 0);
-                            if (childTask.end_date.getTime() <= childTask.start_date.getTime()) {
-                                childTask.end_date = new Date(childTask.start_date.getTime() + 86400000);
+                            let cWorkStart, cWorkEnd;
+                            if (isHourlyMode) {
+                                childTask.start_date.setSeconds(0, 0);
+                                childTask.end_date.setSeconds(0, 0);
+                                if (childTask.end_date.getTime() <= childTask.start_date.getTime()) {
+                                    childTask.end_date = new Date(childTask.start_date.getTime() + 3600000);
+                                }
+                                cWorkStart = new Date(childTask.start_date);
+                                cWorkEnd = new Date(childTask.end_date);
+                            } else {
+                                childTask.start_date = new Date(childTask.start_date.getFullYear(), childTask.start_date.getMonth(), childTask.start_date.getDate(), 0, 0, 0);
+                                childTask.end_date = new Date(childTask.end_date.getFullYear(), childTask.end_date.getMonth(), childTask.end_date.getDate(), 0, 0, 0);
+                                if (childTask.end_date.getTime() <= childTask.start_date.getTime()) {
+                                    childTask.end_date = new Date(childTask.start_date.getTime() + 86400000);
+                                }
+                                const cWork = computeWorkDates(childTask.start_date, childTask.end_date);
+                                cWorkStart = cWork.workStart;
+                                cWorkEnd = cWork.workEnd;
                             }
-                            const cWork = computeWorkDates(childTask.start_date, childTask.end_date);
-                            childTask.work_start_date = formatOdooDateTime(cWork.workStart);
-                            childTask.work_end_date = formatOdooDateTime(cWork.workEnd);
+                            childTask.work_start_date = formatOdooDateTime(cWorkStart);
+                            childTask.work_end_date = formatOdooDateTime(cWorkEnd);
                             if (childTask.is_milestone) {
-                                childTask.planned_date_start = formatOdooDateTime(cWork.workStart);
-                                childTask.planned_date_end = formatOdooDateTime(cWork.workEnd);
+                                childTask.planned_date_start = formatOdooDateTime(cWorkStart);
+                                childTask.planned_date_end = formatOdooDateTime(cWorkEnd);
                             }
-                            const cWorkCalc = calculateWorkingDaysAndHours(cWork.workStart, cWork.workEnd);
+                            const cWorkCalc = calculateWorkingDaysAndHours(cWorkStart, cWorkEnd);
                             childTask.allocated_hours = `${cWorkCalc.workHours}h`;
 
                             updates.push({
                                 id: childTask.id,
-                                start_date: formatOdooDateTime(cWork.workStart),
-                                end_date: formatOdooDateTime(cWork.workEnd),
+                                start_date: formatOdooDateTime(cWorkStart),
+                                end_date: formatOdooDateTime(cWorkEnd),
                                 progress: childTask.progress,
                                 allocated_hours: cWorkCalc.workHours,
                             });
@@ -1723,24 +1831,38 @@ export class AllInOneTimelineAction extends Component {
         const g = this.gantt;
         if (!g) return;
 
-        // Reset global scale_cell_class for day units (marks today, holidays, and weekends)
+        // Reset global scale_cell_class for hour and day units (marks today, holidays, weekends, work hours)
         g.templates.scale_cell_class = (date, scale) => {
-            if (!scale || scale.unit !== "day") {
-                return "";
-            }
+            if (!scale) return "";
             const today = new Date();
             const d = new Date(date);
-            const classes = [];
-            if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()) {
-                classes.push("today_scale_cell");
-            }
+            const isToday = (
+                d.getFullYear() === today.getFullYear() &&
+                d.getMonth() === today.getMonth() &&
+                d.getDate() === today.getDate()
+            );
             const hol = getLithuanianHoliday(d);
-            if (hol) {
-                classes.push("holiday_scale_cell");
-            } else if (isWeekend(d)) {
-                classes.push("weekend_scale_cell");
+            const wknd = isWeekend(d);
+
+            if (scale.unit === "hour") {
+                const h = d.getHours();
+                if (isToday) {
+                    return (h >= 8 && h < 17 && !hol && !wknd) ? "today_scale_cell work_hour_scale_cell" : "today_scale_cell off_hour_scale_cell";
+                }
+                if (hol) return "holiday_scale_cell";
+                if (wknd) return "weekend_scale_cell";
+                return (h >= 8 && h < 17) ? "work_hour_scale_cell" : "off_hour_scale_cell";
             }
-            return classes.join(" ");
+
+            if (scale.unit === "day") {
+                const classes = [];
+                if (isToday) classes.push("today_scale_cell");
+                if (hol) classes.push("holiday_scale_cell");
+                else if (wknd) classes.push("weekend_scale_cell");
+                return classes.join(" ");
+            }
+
+            return "";
         };
 
         const zoom = this.state.zoomLevel;
@@ -1788,6 +1910,7 @@ export class AllInOneTimelineAction extends Component {
 
         // Below 50% (< 50%): 4 rows (Year, Quarter, Month, Week). Base unit is WEEK.
         if (zoom < 50) {
+            g.config.time_step = 1440;
             g.config.scales = [yearScale, quarterScale, monthScale, weekScale];
             g.config.scale_height = 88; // 4 rows * 22px = 88px
 
@@ -1801,7 +1924,61 @@ export class AllInOneTimelineAction extends Component {
             return;
         }
 
-        // Zoom >= 50%: 5 rows (Year, Quarter, Month, Week, Day). Base unit is DAY.
+        // Hourly timescale (>= 300%): 5 rows (Year, Month, Week, Day, Hour). Base unit is HOUR.
+        if (zoom >= 300) {
+            g.config.time_step = (zoom === 300 ? 120 : 60);
+
+            const hourStep = zoom === 300 ? 2 : 1;
+            const hourColWidth = zoom === 300 ? 44 : (zoom === 400 ? 40 : 60);
+
+            const dayScaleHourly = {
+                unit: "day",
+                step: 1,
+                format: (date) => {
+                    const d = date.getDate();
+                    const wd = LITHUANIAN_WEEKDAYS_SHORT[date.getDay()];
+                    const hol = getLithuanianHoliday(date);
+                    if (hol) {
+                        return `<span class="holiday_day_cell" title="${hol}">★${d} (${wd})</span>`;
+                    }
+                    return `${d} (${wd})`;
+                },
+                css: (date) => {
+                    const today = new Date();
+                    if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
+                        return "today_scale_cell";
+                    }
+                    if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                    if (isWeekend(date)) return "weekend_scale_cell";
+                    return "";
+                },
+            };
+
+            const hourScale = {
+                unit: "hour",
+                step: hourStep,
+                format: (date) => {
+                    const h = date.getHours();
+                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                    return `${pad(h)}:00`;
+                },
+                css: (date) => {
+                    const h = date.getHours();
+                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                        return "work_hour_scale_cell";
+                    }
+                    return "off_hour_scale_cell";
+                },
+            };
+
+            g.config.scales = [yearScale, monthScale, weekScale, dayScaleHourly, hourScale];
+            g.config.scale_height = 110; // 5 rows * 22px = 110px
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : hourColWidth;
+            return;
+        }
+
+        // Zoom >= 50% and < 300%: 5 rows (Year, Quarter, Month, Week, Day). Base unit is DAY.
+        g.config.time_step = 1440;
         const dayScale = {
             unit: "day",
             step: 1,
@@ -1870,10 +2047,15 @@ export class AllInOneTimelineAction extends Component {
                 });
             }
 
-            if (data.tasks && Object.keys(openStates).length > 0) {
+            if (data.tasks) {
+                const isHourly = (this.state.zoomLevel >= 300);
                 for (const t of data.tasks) {
                     if (openStates[t.id] !== undefined) {
                         t.open = openStates[t.id];
+                    }
+                    if (isHourly && t.work_start_date && t.work_end_date) {
+                        t.start_date = t.work_start_date;
+                        t.end_date = t.work_end_date;
                     }
                 }
             }
@@ -2164,7 +2346,11 @@ export class AllInOneTimelineAction extends Component {
         let startDate;
         let endDate;
 
-        if (this.state.zoomLevel <= 15) {
+        if (this.state.zoomLevel >= 300) {
+            // Hourly zoom (300% - 500%): 7 days past, 14 days future buffer for high performance
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 7, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 14, 23, 59, 59);
+        } else if (this.state.zoomLevel <= 15) {
             // Extreme zoom (10% - 15%): Multi-year buffer
             startDate = new Date(effectiveMin.getFullYear() - 1, 0, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear() + 2, 11, 31, 23, 59, 59);
@@ -2177,7 +2363,7 @@ export class AllInOneTimelineAction extends Component {
             startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 2, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 4, 0, 23, 59, 59);
         } else {
-            // Detailed zoom (>= 50%): Days buffer
+            // Detailed zoom (>= 50% and < 300%): Days buffer
             startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 1, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 3, 0, 23, 59, 59);
         }
@@ -2261,7 +2447,9 @@ export class AllInOneTimelineAction extends Component {
         let marker = dataArea.querySelector(".custom_today_marker");
         try {
             const today = new Date();
-            today.setHours(12, 0, 0, 0);
+            if (this.state.zoomLevel < 300) {
+                today.setHours(12, 0, 0, 0);
+            }
             const leftPos = this.safePosFromDate(today);
             if (leftPos >= 0) {
                 if (!marker) {
@@ -2379,9 +2567,38 @@ export class AllInOneTimelineAction extends Component {
                 focalDate = new Date();
             }
 
+            const wasHourly = (this.state.zoomLevel >= 300);
+            const isHourly = (level >= 300);
+
             // 2. Apply the new zoom level and reconfigure scale & range
             this.state.zoomLevel = level;
             this.applyScaleConfig();
+
+            // Seamless transition between daily and hourly view task rendering
+            if (wasHourly !== isHourly && g.eachTask) {
+                g.eachTask((t) => {
+                    if (isHourly) {
+                        if (t.work_start_date && t.work_end_date) {
+                            t.start_date = new Date(t.work_start_date.replace(/-/g, "/"));
+                            t.end_date = new Date(t.work_end_date.replace(/-/g, "/"));
+                            if (t.end_date <= t.start_date) {
+                                t.end_date = new Date(t.start_date.getTime() + 3600000);
+                            }
+                        }
+                    } else {
+                        const s = t.work_start_date ? new Date(t.work_start_date.replace(/-/g, "/")) : new Date(t.start_date);
+                        const e = t.work_end_date ? new Date(t.work_end_date.replace(/-/g, "/")) : new Date(t.end_date);
+                        t.start_date = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0);
+                        let endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+                        if (e.getHours() > 0 || e.getMinutes() > 0 || endDay.getTime() === t.start_date.getTime()) {
+                            endDay.setDate(endDay.getDate() + 1);
+                        }
+                        t.end_date = new Date(endDay.getFullYear(), endDay.getMonth(), endDay.getDate(), 0, 0, 0);
+                    }
+                    g.updateTask(t.id);
+                });
+            }
+
             this.ensureTimelineRange(focalDate, (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate);
             g.render();
 

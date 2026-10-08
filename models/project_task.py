@@ -50,35 +50,73 @@ def get_lithuanian_holidays(year):
 
 def calculate_lithuanian_working_hours(start_dt, end_dt):
     """
-    Calculates actual working hours (8 hours per work day, 8:00 - 17:00)
-    excluding weekends (Saturday, Sunday) and Lithuanian national public holidays.
-    If end_dt is midnight (00:00:00) and represents a Gantt boundary ending the previous day,
-    the active work day is shifted to end_dt - 1 day.
+    Calculates actual working hours excluding weekends (Saturday, Sunday)
+    and Lithuanian national public holidays.
+    - If dates represent standard full work days (08:00 - 17:00 or date-only boundaries),
+      counts 8 hours per full working day.
+    - If dates have specific intra-day hours (e.g. 10:00 - 14:00),
+      calculates the actual working hours within business working window (08:00 - 17:00).
     """
     if not start_dt or not end_dt:
         return 0.0
-    s_date = start_dt.date() if isinstance(start_dt, datetime) else start_dt
+
+    s_dt = start_dt if isinstance(start_dt, datetime) else datetime.combine(start_dt, time(8, 0, 0))
     if isinstance(end_dt, datetime):
-        e_date = end_dt.date()
-        if end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0 and e_date > s_date:
-            e_date = e_date - timedelta(days=1)
+        if end_dt.hour == 0 and end_dt.minute == 0 and end_dt.second == 0 and end_dt.date() > s_dt.date():
+            e_dt = datetime.combine(end_dt.date() - timedelta(days=1), time(17, 0, 0))
+        else:
+            e_dt = end_dt
     else:
-        e_date = end_dt
-    if e_date < s_date:
+        e_dt = datetime.combine(end_dt, time(17, 0, 0))
+
+    if e_dt < s_dt:
         return 0.0
 
-    holidays = get_lithuanian_holidays(s_date.year)
-    if e_date.year != s_date.year:
-        holidays.update(get_lithuanian_holidays(e_date.year))
+    holidays = get_lithuanian_holidays(s_dt.year)
+    if e_dt.year != s_dt.year:
+        holidays.update(get_lithuanian_holidays(e_dt.year))
 
-    work_days = 0
-    curr = s_date
-    while curr <= e_date:
-        if curr.weekday() < 5 and curr not in holidays:
-            work_days += 1
-        curr += timedelta(days=1)
+    total_hours = 0.0
+    curr_date = s_dt.date()
+    is_single_day = (s_dt.date() == e_dt.date())
+    is_full_day_std = (s_dt.hour == 8 and s_dt.minute == 0 and e_dt.hour == 17 and e_dt.minute == 0) or (s_dt.hour == 0 and e_dt.hour == 0)
 
-    return float(work_days * 8)
+    while curr_date <= e_dt.date():
+        if curr_date.weekday() < 5 and curr_date not in holidays:
+            day_work_start = datetime.combine(curr_date, time(8, 0, 0))
+            day_work_end = datetime.combine(curr_date, time(17, 0, 0))
+
+            if is_single_day:
+                if is_full_day_std or (s_dt <= day_work_start and e_dt >= day_work_end):
+                    total_hours += 8.0
+                else:
+                    act_start = max(s_dt, day_work_start)
+                    act_end = min(e_dt, day_work_end)
+                    if act_end > act_start:
+                        h = (act_end - act_start).total_seconds() / 3600.0
+                        total_hours += (8.0 if h >= 8.9 else round(h, 2))
+            elif curr_date == s_dt.date():
+                if s_dt <= day_work_start:
+                    total_hours += 8.0
+                else:
+                    act_start = max(s_dt, day_work_start)
+                    if day_work_end > act_start:
+                        h = (day_work_end - act_start).total_seconds() / 3600.0
+                        total_hours += round(min(8.0, h), 2)
+            elif curr_date == e_dt.date():
+                if e_dt >= day_work_end:
+                    total_hours += 8.0
+                else:
+                    act_end = min(e_dt, day_work_end)
+                    if act_end > day_work_start:
+                        h = (act_end - day_work_start).total_seconds() / 3600.0
+                        total_hours += round(min(8.0, h), 2)
+            else:
+                total_hours += 8.0
+
+        curr_date += timedelta(days=1)
+
+    return float(total_hours)
 
 
 class ProjectTask(models.Model):
@@ -330,7 +368,7 @@ class ProjectTask(models.Model):
             # User-assigned or default start
             if t.planned_date_start:
                 t_s = t.planned_date_start
-                if t_s.hour == 0 and t_s.minute == 0:
+                if t_s.hour == 0 and t_s.minute == 0 and (not t.planned_date_end or (t.planned_date_end.hour == 0 and t.planned_date_end.minute == 0)):
                     t_s = t_s.replace(hour=8, minute=0, second=0)
             else:
                 base_dt = t.date_assign or t.create_date or now
@@ -339,12 +377,16 @@ class ProjectTask(models.Model):
             # User-assigned or default end
             if t.planned_date_end:
                 t_e = t.planned_date_end
-                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 12 and t_e.minute == 0):
+                # Only replace midnight with 17:00 if start is also full-day (08:00 or 00:00)
+                if t_e.hour == 0 and t_e.minute == 0 and (not t.planned_date_start or t.planned_date_start.hour in (0, 8)):
                     t_e = t_e.replace(hour=17, minute=0, second=0)
             elif t.date_deadline:
                 t_e = t.date_deadline
-                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 12 and t_e.minute == 0):
-                    t_e = t_e.replace(hour=17, minute=0, second=0)
+                if isinstance(t_e, datetime):
+                    if t_e.hour == 0 and t_e.minute == 0:
+                        t_e = t_e.replace(hour=17, minute=0, second=0)
+                else:
+                    t_e = datetime.combine(t_e, time(17, 0, 0))
             else:
                 # If task has NO end date and NO deadline:
                 # Takes span of exactly one day on the timeline (same day 17:00)
@@ -602,6 +644,7 @@ class ProjectTask(models.Model):
                 "has_deadline_delay": has_deadline_delay,
                 "delay_days": delay_days,
                 "has_dates": has_dates,
+                "is_hourly": bool(has_dates and t_start.date() == t_end.date() and (t_end - t_start).total_seconds() < 9 * 3600),
                 "progress": 0.0 if is_locked else round(prog, 2),
                 "progress_percent": 0 if is_locked else round(prog * 100, 1),
                 "allocated_hours": allocated_str,
