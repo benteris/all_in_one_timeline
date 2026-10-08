@@ -28,7 +28,7 @@ Pagrindinės funkcijos:
 * Užduočių priklausomybių ryšiai (Finish-to-Start) su rodyklėmis.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "19.0.1.0.0",
+    "version": "19.0.1.1.0",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",

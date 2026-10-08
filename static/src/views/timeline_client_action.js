@@ -2283,3 +2283,36 @@ export class AllInOneTimelineAction extends Component {
 
 // Register Client Action
 registry.category("actions").add("all_in_one_timeline.action", AllInOneTimelineAction);
+
+// Register Timeline View to override timeline view with All In One Advanced Gantt
+export const AllInOneTimelineView = {
+    type: "timeline",
+    display_name: _t("Timeline"),
+    icon: "fa fa-tasks",
+    multiRecord: true,
+    Controller: AllInOneTimelineAction,
+    props: (genericProps) => {
+        return {
+            ...genericProps,
+        };
+    },
+};
+
+const viewsRegistry = registry.category("views");
+const origViewsAdd = viewsRegistry.add.bind(viewsRegistry);
+
+viewsRegistry.add = function (key, value, options = {}) {
+    if (key === "timeline") {
+        if (value === AllInOneTimelineView) {
+            return origViewsAdd(key, value, { ...options, force: true });
+        }
+        // If web_timeline or any other module attempts to register "timeline",
+        // intercept it silently without throwing DuplicatedKeyError,
+        // and keep AllInOneTimelineView as the active timeline view!
+        return this;
+    }
+    return origViewsAdd(key, value, options);
+};
+
+// Register All In One Timeline as the timeline view
+viewsRegistry.add("timeline", AllInOneTimelineView, { force: true });
