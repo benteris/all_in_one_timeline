@@ -5,6 +5,13 @@ from odoo import api, fields, models
 class ProjectProject(models.Model):
     _inherit = "project.project"
 
+    date_deadline = fields.Date(
+        string="Deadline",
+        copy=False,
+        tracking=True,
+        help="Final deadline for the project. If later than the planned date, indicates delay.",
+    )
+
     def action_open_all_in_one_timeline(self):
         """Opens All In One Timeline filtered for this project."""
         self.ensure_one()

@@ -584,6 +584,37 @@ export class AllInOneTimelineAction extends Component {
                 `;
             }
 
+            let deadlineHtml = "";
+            let dlDate = null;
+            if (task.date_deadline || task.has_deadline) {
+                const dlRaw = task.date_deadline || task.deadline;
+                if (dlRaw) {
+                    dlDate = new Date(String(dlRaw).replace(/-/g, "/"));
+                    if (!isNaN(dlDate.getTime())) {
+                        const dlFormatted = g.templates.tooltip_date_format(dlDate);
+                        deadlineHtml += `<div class="tooltip_row tooltip_deadline_row"><span class="tooltip_label">Terminas:</span> <span class="tooltip_val">${dlFormatted}</span></div>`;
+                    } else {
+                        dlDate = null;
+                    }
+                }
+            }
+            if (task.has_deadline_delay) {
+                const delayDays = task.delay_days || 0;
+                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimas:</span> <span class="tooltip_val text-danger fw-bold">+${delayDays} d. (pratęstas)</span></div>`;
+
+                // Calculate actual working days and working hours in the delayed window (excluding weekends & holidays)
+                let delayWorkDays = 0;
+                let delayWorkHours = 0;
+                if (effEnd && dlDate && dlDate > effEnd) {
+                    const delayStart = new Date(effEnd.getFullYear(), effEnd.getMonth(), effEnd.getDate() + 1, 8, 0, 0);
+                    const delayCalc = calculateWorkingDaysAndHours(delayStart, dlDate);
+                    delayWorkDays = delayCalc.workDays;
+                    delayWorkHours = delayCalc.workHours;
+                }
+                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. dienos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkDays} d.</span></div>`;
+                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours} val.</span></div>`;
+            }
+
             if (task.is_project) {
                 return `
                     <div class="gantt_tooltip_inner">
@@ -591,6 +622,7 @@ export class AllInOneTimelineAction extends Component {
                         <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projektas</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
+                        ${deadlineHtml}
                         <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
@@ -609,6 +641,7 @@ export class AllInOneTimelineAction extends Component {
                     <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
+                    ${deadlineHtml}
                     <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
@@ -622,37 +655,75 @@ export class AllInOneTimelineAction extends Component {
             `;
         };
 
-        // Task Bar Text & Progress Template (Reflects progress directly in the line itself)
+        // Task Bar Text & Progress Template (Reflects progress directly in the line itself and renders deadline delay bar)
         g.templates.task_text = (start, end, task) => {
             const percent = Math.round((task.progress || 0) * 100);
             const isDone = task.is_done || percent >= 100;
             const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : "bar_prog_badge";
+
+            let delayBarHtml = "";
+            if (task.has_deadline_delay && task.deadline_end) {
+                const dlEnd = task.deadline_end instanceof Date
+                    ? task.deadline_end
+                    : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                if (!isNaN(dlEnd.getTime())) {
+                    let widthPx = 0;
+                    try {
+                        const sPx = (typeof g.posFromDate === "function") ? g.posFromDate(end || task.end_date) : -1;
+                        const ePx = (typeof g.posFromDate === "function") ? g.posFromDate(dlEnd) : -1;
+                        if (sPx >= 0 && ePx > sPx) {
+                            widthPx = Math.round(ePx - sPx);
+                        }
+                    } catch {
+                        widthPx = 0;
+                    }
+                    if (!widthPx || widthPx <= 0) {
+                        const eDate = (end || task.end_date) instanceof Date ? (end || task.end_date) : new Date(String(end || task.end_date).replace(/-/g, "/"));
+                        const diffDays = Math.max(1, Math.round((dlEnd.getTime() - eDate.getTime()) / 86400000));
+                        const pxPerDay = ZOOM_PX_PER_DAY[this.state.zoomLevel] || 32;
+                        widthPx = Math.round(diffDays * pxPerDay);
+                    }
+
+                    const delayDays = task.delay_days || 0;
+                    const badgeText = widthPx >= 28
+                        ? `<i class="fa fa-clock-o me-1"></i>+${delayDays} d.`
+                        : (widthPx >= 14 ? `+${delayDays}` : "");
+                    delayBarHtml = `
+                        <div class="timeline_deadline_delay_bar" style="position: absolute; left: 100%; top: -1px; width: ${widthPx}px; height: calc(100% + 2px);">
+                            <span class="deadline_badge">${badgeText}</span>
+                        </div>
+                    `;
+                }
+            }
+
             return `
                 <span class="bar_content_wrapper">
                     <span class="bar_text">${task.text}</span>
                     <span class="${badgeClass}">${percent}%</span>
                 </span>
+                ${delayBarHtml}
             `;
         };
 
         // Task Bar Styling Template (Marks done tasks, done milestones, and done projects green)
         g.templates.task_class = (start, end, task) => {
+            const extraClass = task.has_deadline_delay ? " has_deadline_delay" : "";
             if (task.is_project) {
                 if (task.is_done || task.progress >= 1.0) {
-                    return "gantt_project project_done";
+                    return "gantt_project project_done" + extraClass;
                 }
-                return "gantt_project";
+                return "gantt_project" + extraClass;
             }
             if (task.is_milestone) {
                 if (task.is_done || task.progress >= 1.0) {
-                    return "timeline_milestone_bar milestone_done";
+                    return "timeline_milestone_bar milestone_done" + extraClass;
                 }
-                return "timeline_milestone_bar";
+                return "timeline_milestone_bar" + extraClass;
             }
             if (task.is_done || task.progress >= 1.0 || task.state === "1_done") {
-                return "task_done";
+                return "task_done" + extraClass;
             }
-            return "task_standard";
+            return "task_standard" + extraClass;
         };
 
         // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header (strictly for day units only)
@@ -1807,6 +1878,12 @@ export class AllInOneTimelineAction extends Component {
                         if (!maxDate || e > maxDate) maxDate = e;
                     }
                 }
+                if (task.deadline_end) {
+                    const dl = task.deadline_end instanceof Date ? task.deadline_end : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                    if (!isNaN(dl.getTime())) {
+                        if (!maxDate || dl > maxDate) maxDate = dl;
+                    }
+                }
             });
         }
 
@@ -2257,6 +2334,10 @@ export class AllInOneTimelineAction extends Component {
         if (targetTask && targetTask.start_date && targetTask.end_date) {
             minStart = new Date(targetTask.start_date);
             maxEnd = new Date(targetTask.end_date);
+            if (targetTask.deadline_end) {
+                const tdl = targetTask.deadline_end instanceof Date ? targetTask.deadline_end : new Date(String(targetTask.deadline_end).replace(/-/g, "/"));
+                if (!isNaN(tdl.getTime()) && tdl > maxEnd) maxEnd = tdl;
+            }
             // If it's a project or parent task with children, encompass all descendants
             const encompassDescendants = (parentId) => {
                 const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
@@ -2270,6 +2351,10 @@ export class AllInOneTimelineAction extends Component {
                         if (child.end_date) {
                             const ce = new Date(child.end_date);
                             if (!maxEnd || ce > maxEnd) maxEnd = ce;
+                        }
+                        if (child.deadline_end) {
+                            const cdl = child.deadline_end instanceof Date ? child.deadline_end : new Date(String(child.deadline_end).replace(/-/g, "/"));
+                            if (!isNaN(cdl.getTime()) && cdl > maxEnd) maxEnd = cdl;
                         }
                         encompassDescendants(childId);
                     }
@@ -2287,6 +2372,10 @@ export class AllInOneTimelineAction extends Component {
                     if (t.end_date) {
                         const e = new Date(t.end_date);
                         if (!maxEnd || e > maxEnd) maxEnd = e;
+                    }
+                    if (t.deadline_end) {
+                        const tdl = t.deadline_end instanceof Date ? t.deadline_end : new Date(String(t.deadline_end).replace(/-/g, "/"));
+                        if (!isNaN(tdl.getTime()) && tdl > maxEnd) maxEnd = tdl;
                     }
                 });
             }

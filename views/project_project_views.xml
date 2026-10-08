@@ -17,6 +17,9 @@
                     </div>
                 </button>
             </xpath>
+            <xpath expr="//field[@name='date_start']" position="after">
+                <field name="date_deadline" string="Deadline"/>
+            </xpath>
         </field>
     </record>
 </odoo>

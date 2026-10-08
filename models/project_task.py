@@ -242,6 +242,33 @@ class ProjectTask(models.Model):
 
             allocated_str = f"{round(t.allocated_hours, 1)}h" if t.allocated_hours else ""
 
+            # Deadline and Delay Calculation
+            deadline_str = False
+            deadline_end_str = False
+            has_deadline = False
+            has_deadline_delay = False
+            delay_days = 0
+
+            if t.date_deadline:
+                has_deadline = True
+                dl_dt = t.date_deadline
+                deadline_str = dl_dt.strftime(dt_format)
+
+                # Midnight boundary for visual end of deadline on Gantt grid
+                if dl_dt.time() > time.min:
+                    gantt_dl_end = datetime.combine(dl_dt.date() + timedelta(days=1), time.min)
+                else:
+                    gantt_dl_end = datetime.combine(dl_dt.date(), time.min)
+
+                deadline_end_str = gantt_dl_end.strftime(dt_format)
+
+                # Delay occurs if deadline extends past the planned work end date
+                if dl_dt.date() > t_end.date():
+                    has_deadline_delay = True
+                    delay_days = (dl_dt.date() - t_end.date()).days
+                elif dl_dt.date() < t_end.date():
+                    delay_days = -(t_end.date() - dl_dt.date()).days
+
             return {
                 "id": f"task_{t.id}",
                 "odoo_id": t.id,
@@ -253,6 +280,13 @@ class ProjectTask(models.Model):
                 "end_date": t_end_str,
                 "work_start_date": work_start_str,
                 "work_end_date": work_end_str,
+                "planned_date_start": t.planned_date_start.strftime(dt_format) if t.planned_date_start else False,
+                "planned_date_end": t.planned_date_end.strftime(dt_format) if t.planned_date_end else False,
+                "date_deadline": deadline_str,
+                "deadline_end": deadline_end_str,
+                "has_deadline": has_deadline,
+                "has_deadline_delay": has_deadline_delay,
+                "delay_days": delay_days,
                 "progress": round(prog, 2),
                 "progress_percent": round(prog * 100, 1),
                 "allocated_hours": allocated_str,
@@ -365,6 +399,33 @@ class ProjectTask(models.Model):
 
             project_color = "#28a745" if p_is_done else "#5f5285"
 
+            # Project Deadline and Delay Calculation
+            p_deadline_str = False
+            p_deadline_end_str = False
+            p_has_deadline = False
+            p_has_deadline_delay = False
+            p_delay_days = 0
+
+            p_date_deadline = getattr(p, "date_deadline", False)
+            if p_date_deadline:
+                p_has_deadline = True
+                p_dl_dt = datetime.combine(p_date_deadline, time(17, 0, 0)) if not isinstance(p_date_deadline, datetime) else p_date_deadline
+                p_deadline_str = p_dl_dt.strftime(dt_format)
+
+                # Midnight boundary for visual end of deadline on Gantt grid
+                if p_dl_dt.time() > time.min:
+                    gantt_p_dl_end = datetime.combine(p_dl_dt.date() + timedelta(days=1), time.min)
+                else:
+                    gantt_p_dl_end = datetime.combine(p_dl_dt.date(), time.min)
+
+                p_deadline_end_str = gantt_p_dl_end.strftime(dt_format)
+
+                if p_dl_dt.date() > p_end.date():
+                    p_has_deadline_delay = True
+                    p_delay_days = (p_dl_dt.date() - p_end.date()).days
+                elif p_dl_dt.date() < p_end.date():
+                    p_delay_days = -(p_end.date() - p_dl_dt.date()).days
+
             gantt_tasks.append({
                 "id": p_key,
                 "odoo_id": p.id,
@@ -374,6 +435,11 @@ class ProjectTask(models.Model):
                 "end_date": p_end_str,
                 "work_start_date": p_work_start_str,
                 "work_end_date": p_work_end_str,
+                "date_deadline": p_deadline_str,
+                "deadline_end": p_deadline_end_str,
+                "has_deadline": p_has_deadline,
+                "has_deadline_delay": p_has_deadline_delay,
+                "delay_days": p_delay_days,
                 "progress": round(p_prog, 2),
                 "progress_percent": round(p_prog * 100, 1),
                 "allocated_hours": f"{round(total_allocated, 1)}h" if total_allocated else "",
@@ -488,6 +554,10 @@ class ProjectTask(models.Model):
                     "assignee_avatars": [],
                     "project_name": p.name or "",
                     "project_id": p.id,
+                    "date_deadline": m.deadline.strftime(dt_format) if m.deadline else False,
+                    "has_deadline": bool(m.deadline),
+                    "has_deadline_delay": False,
+                    "delay_days": 0,
                     "task_count": m.task_count,
                     "done_task_count": m.done_task_count,
                     "color": milestone_color,
@@ -575,7 +645,10 @@ class ProjectTask(models.Model):
                         if start_date:
                             vals["date_start"] = fields.Date.to_date(start_date)
                         if end_date:
-                            vals["date"] = fields.Date.to_date(end_date)
+                            d_end = fields.Date.to_date(end_date)
+                            vals["date"] = d_end
+                            if hasattr(proj, "date_deadline") and (not proj.date_deadline or (proj.date and proj.date_deadline == proj.date)):
+                                vals["date_deadline"] = d_end
                         if vals:
                             proj.write(vals)
                 except Exception as e:
@@ -619,7 +692,9 @@ class ProjectTask(models.Model):
                     if end_date:
                         dt_end = fields.Datetime.to_datetime(end_date)
                         vals["planned_date_end"] = dt_end
-                        vals["date_deadline"] = dt_end
+                        # Only update date_deadline if it was unset or if it was synchronized with planned_date_end
+                        if not task.date_deadline or (task.planned_date_end and task.date_deadline.date() == task.planned_date_end.date()):
+                            vals["date_deadline"] = dt_end
                     if progress is not None:
                         vals["progress"] = min(100.0, max(0.0, float(progress) * 100.0))
                     if vals:
