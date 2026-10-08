@@ -2283,18 +2283,3 @@ export class AllInOneTimelineAction extends Component {
 
 // Register Client Action
 registry.category("actions").add("all_in_one_timeline.action", AllInOneTimelineAction);
-
-// Register Timeline View to override standard timeline with All In One Advanced Gantt
-export const AllInOneTimelineView = {
-    type: "timeline",
-    display_name: _t("Timeline"),
-    icon: "fa fa-tasks",
-    multiRecord: true,
-    Controller: AllInOneTimelineAction,
-    props: (genericProps) => {
-        return {
-            ...genericProps,
-        };
-    },
-};
-registry.category("views").add("timeline", AllInOneTimelineView, { force: true });

@@ -6,15 +6,12 @@ class ProjectProject(models.Model):
     _inherit = "project.project"
 
     def action_open_all_in_one_timeline(self):
-        """Opens All In One Timeline filtered for this project as standard viewable window action."""
+        """Opens All In One Timeline filtered for this project."""
         self.ensure_one()
         return {
-            "type": "ir.actions.act_window",
+            "type": "ir.actions.client",
             "name": f"{self.name} - Timeline",
-            "res_model": "project.task",
-            "view_mode": "timeline,kanban,list,form",
-            "views": [(False, "timeline"), (False, "kanban"), (False, "list"), (False, "form")],
-            "domain": [("project_id", "=", self.id)],
+            "tag": "all_in_one_timeline.action",
             "context": {
                 "default_project_id": self.id,
                 "active_id": self.id,
