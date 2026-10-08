@@ -540,6 +540,7 @@ class ProjectTask(models.Model):
                 "color": project_color,
                 "state": p_state,
                 "last_update_status": p_update_status,
+                "stage_name": p.stage_id.name if hasattr(p, "stage_id") and p.stage_id else "",
                 "is_project": True,
                 "is_milestone": False,
                 "is_done": bool(p_is_done),

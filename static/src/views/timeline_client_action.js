@@ -677,11 +677,70 @@ export class AllInOneTimelineAction extends Component {
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours} val.</span></div>`;
             }
 
+            const getStatusBadge = (t) => {
+                if (t.is_project) {
+                    const pStatus = t.last_update_status || "";
+                    if (pStatus === "on_hold" || t.state === "04_on_hold" || t.state === "04_waiting_normal") {
+                        return `<span style="color: #00827f; font-weight: 700;"><i class="fa fa-circle me-1" style="color: #00a09d;"></i>Sustabdytas (On Hold)</span>`;
+                    }
+                    if (pStatus === "on_track" || t.state === "03_on_track" || t.state === "03_approved") {
+                        return `<span style="color: #059669; font-weight: 700;"><i class="fa fa-circle text-success me-1"></i>Pagal planą (On Track)</span>`;
+                    }
+                    if (pStatus === "at_risk" || t.state === "02_at_risk" || t.state === "02_changes_requested") {
+                        return `<span style="color: #d97706; font-weight: 700;"><i class="fa fa-circle text-warning me-1"></i>Rizikingas (At Risk)</span>`;
+                    }
+                    if (pStatus === "off_track" || t.state === "1_off_track" || t.state === "1_canceled") {
+                        return `<span style="color: #dc2626; font-weight: 700;"><i class="fa fa-circle text-danger me-1"></i>Vėluojantis (Off Track)</span>`;
+                    }
+                    if (pStatus === "done" || t.is_done || t.state === "1_done") {
+                        return `<span style="color: #16a34a; font-weight: 700;"><i class="fa fa-check-circle text-success me-1"></i>Užbaigtas (Complete)</span>`;
+                    }
+                    if (t.state === "03_approved") {
+                        return `<span style="color: #059669; font-weight: 700;"><i class="fa fa-circle text-success me-1"></i>Patvirtinta</span>`;
+                    }
+                    if (t.state === "02_changes_requested") {
+                        return `<span style="color: #d97706; font-weight: 700;"><i class="fa fa-exclamation-triangle text-warning me-1"></i>Koregavimas</span>`;
+                    }
+                    if (t.state === "1_canceled") {
+                        return `<span style="color: #dc2626; font-weight: 700;"><i class="fa fa-times-circle text-danger me-1"></i>Atšaukta</span>`;
+                    }
+                    return `<span style="color: #5f5285; font-weight: 700;"><i class="fa fa-folder-open text-primary me-1"></i>Vykdomas</span>`;
+                }
+
+                if (t.is_milestone) {
+                    if (t.is_done || t.state === "1_done") {
+                        return `<span style="color: #16a34a; font-weight: 700;"><i class="fa fa-check-circle text-success me-1"></i>Pasiekta (Achieved)</span>`;
+                    }
+                    return `<span style="color: #2563eb; font-weight: 700;"><i class="fa fa-flag text-primary me-1"></i>Vykdoma (In Progress)</span>`;
+                }
+
+                // Task / Subtask
+                const state = t.state || (t.is_done ? "1_done" : "01_in_progress");
+                if (state === "1_done" || t.is_done) {
+                    return `<span style="color: #16a34a; font-weight: 700;"><i class="fa fa-check-circle text-success me-1"></i>Atlikta (Done)</span>`;
+                }
+                if (state === "03_approved") {
+                    return `<span style="color: #059669; font-weight: 700;"><i class="fa fa-circle text-success me-1"></i>Patvirtinta (Approved)</span>`;
+                }
+                if (state === "02_changes_requested") {
+                    return `<span style="color: #d97706; font-weight: 700;"><i class="fa fa-exclamation-triangle text-warning me-1"></i>Koregavimas (Changes Requested)</span>`;
+                }
+                if (state === "1_canceled") {
+                    return `<span style="color: #dc2626; font-weight: 700;"><i class="fa fa-times-circle text-danger me-1"></i>Atšaukta (Canceled)</span>`;
+                }
+                if (state === "04_waiting_normal") {
+                    return `<span style="color: #64748b; font-weight: 700;"><i class="fa fa-clock-o text-secondary me-1"></i>Laukiama (Waiting)</span>`;
+                }
+                return `<span style="color: #71639e; font-weight: 700;"><i class="fa fa-tasks text-muted me-1"></i>Vykdoma (In Progress)</span>`;
+            };
+
             if (task.is_milestone) {
+                const statusHtml = getStatusBadge(task);
                 return `
                     <div class="gantt_tooltip_inner">
                         <div class="tooltip_title"><i class="fa fa-flag text-primary me-1"></i>${task.text}</div>
                         <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projekto gairė</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${statusHtml}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
@@ -689,7 +748,6 @@ export class AllInOneTimelineAction extends Component {
                         <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? "Pasiekta" : "Vykdoma"}</span></div>
                         ${task.task_count !== undefined ? `<div class="tooltip_row"><span class="tooltip_label">Užduotys:</span> <span class="tooltip_val">${task.done_task_count || 0} / ${task.task_count}</span></div>` : ""}
                         <div class="tooltip_progress_bar">
                             <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
@@ -699,10 +757,13 @@ export class AllInOneTimelineAction extends Component {
             }
 
             if (task.is_project) {
+                const statusHtml = getStatusBadge(task);
                 return `
                     <div class="gantt_tooltip_inner">
                         <div class="tooltip_title"><i class="fa fa-folder-open text-primary me-1"></i>${task.text}</div>
                         <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projektas</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${statusHtml}</span></div>
+                        ${task.stage_name ? `<div class="tooltip_row"><span class="tooltip_label">Etapas:</span> <span class="tooltip_val">${task.stage_name}</span></div>` : ""}
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
                         ${deadlineHtml}
@@ -718,10 +779,18 @@ export class AllInOneTimelineAction extends Component {
                 `;
             }
 
+            const isSubtask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+            const typeLabel = isSubtask ? "Po-užduotis" : "Užduotis";
+            const taskStatusHtml = getStatusBadge(task);
+
             return `
                 <div class="gantt_tooltip_inner">
-                    <div class="tooltip_title">${task.text}</div>
+                    <div class="tooltip_title"><i class="fa fa-tasks text-primary me-1"></i>${task.text}</div>
+                    <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">${typeLabel}</span></div>
+                    <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${taskStatusHtml}</span></div>
+                    ${task.stage_name ? `<div class="tooltip_row"><span class="tooltip_label">Etapas:</span> <span class="tooltip_val">${task.stage_name}</span></div>` : ""}
                     <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                    ${task.milestone_name ? `<div class="tooltip_row"><span class="tooltip_label">Gairė:</span> <span class="tooltip_val">${task.milestone_name}</span></div>` : ""}
                     <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
                     ${deadlineHtml}
@@ -730,7 +799,6 @@ export class AllInOneTimelineAction extends Component {
                     <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
                     ${task.allocated_hours ? `<div class="tooltip_row"><span class="tooltip_label">Planuotos val.:</span> <span class="tooltip_val">${task.allocated_hours}</span></div>` : ""}
                     ${task.assignees ? `<div class="tooltip_row"><span class="tooltip_label">Atsakingas:</span> <span class="tooltip_val">${task.assignees}</span></div>` : ""}
-                    ${task.stage_name ? `<div class="tooltip_row"><span class="tooltip_label">Etapas:</span> <span class="tooltip_val">${task.stage_name}</span></div>` : ""}
                     <div class="tooltip_progress_bar">
                         <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
                     </div>
