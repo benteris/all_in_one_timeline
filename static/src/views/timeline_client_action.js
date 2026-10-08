@@ -41,7 +41,7 @@ export const LITHUANIAN_MONTHS_SHORT = [
     "Gru",
 ];
 
-export const ZOOM_STEPS = [10, 15, 20, 25, 35, 50, 75, 100, 125, 150, 175, 200, 250];
+export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200];
 
 export const LITHUANIAN_MONTHS_GENITIVE = [
     "sausio",
@@ -1383,88 +1383,74 @@ export class AllInOneTimelineAction extends Component {
         if (!g) return;
 
         if (this.state.zoomLevel <= 15) {
-            // Extreme Multi-Year Zoom Out (10% - 15%): Base unit is QUARTER!
-            // No months, only Years and Quarters (just numbers 1..4, no 'ketv.')
+            // Extreme Multi-Year Zoom Out (10% - 15%):
+            // Years, Quarters (1..4) and Months with short names (Sau, Vas, Kov...)
+            const colW = this.state.zoomLevel === 10 ? 26 : 34;
             g.config.scales = [
                 { unit: "year", step: 1, format: "%Y" },
                 {
                     unit: "month",
                     step: 3,
-                    format: (date) => {
-                        return Math.floor(date.getMonth() / 3) + 1;
-                    },
-                },
-            ];
-            g.config.scale_height = 54;
-            g.config.min_column_width = customColWidth
-                ? Math.max(16, customColWidth)
-                : Math.max(18, Math.round((260 * this.state.zoomLevel) / 100));
-        } else if (this.state.zoomLevel < 35) {
-            // Multi-Year Zoom Out (20% - 25%): Base unit is MONTH!
-            // Years, Quarters (1..4) and Months as numbers (1..12, no month names)
-            g.config.scales = [
-                { unit: "year", step: 1, format: "%Y" },
-                {
-                    unit: "month",
-                    step: 3,
-                    format: (date) => {
-                        return Math.floor(date.getMonth() / 3) + 1;
-                    },
+                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
                 },
                 {
                     unit: "month",
                     step: 1,
-                    format: (date) => {
-                        return date.getMonth() + 1;
-                    },
+                    format: (date) => LITHUANIAN_MONTHS_SHORT[date.getMonth()],
                 },
             ];
             g.config.scale_height = 70;
-            g.config.min_column_width = customColWidth
-                ? Math.max(12, customColWidth)
-                : Math.max(14, Math.round((110 * this.state.zoomLevel) / 100));
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : colW;
+        } else if (this.state.zoomLevel < 35) {
+            // Multi-Year Zoom Out (20%):
+            // Years, Quarters (1..4) and Months with full names
+            g.config.scales = [
+                { unit: "year", step: 1, format: "%Y" },
+                {
+                    unit: "month",
+                    step: 3,
+                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
+                },
+                {
+                    unit: "month",
+                    step: 1,
+                    format: (date) => LITHUANIAN_MONTHS[date.getMonth()],
+                },
+            ];
+            g.config.scale_height = 70;
+            g.config.min_column_width = customColWidth ? Math.max(24, customColWidth) : 48;
         } else if (this.state.zoomLevel < 50) {
-            // Zoom Out at 35%: Base unit is WEEK!
-            // Years, Quarters (1..4), Months as numbers (1..12), and Weeks (just numbers, no S)
+            // Zoom Out at 35%:
+            // Years, Quarters (1..4), Months with full names, and Weeks (numbers)
             g.config.scales = [
                 { unit: "year", step: 1, format: "%Y" },
                 {
                     unit: "month",
                     step: 3,
-                    format: (date) => {
-                        return Math.floor(date.getMonth() / 3) + 1;
-                    },
+                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
                 },
                 {
                     unit: "month",
                     step: 1,
-                    format: (date) => {
-                        return date.getMonth() + 1;
-                    },
+                    format: (date) => LITHUANIAN_MONTHS[date.getMonth()],
                 },
                 {
                     unit: "week",
                     step: 1,
-                    format: (date) => {
-                        return getISOWeekNumber(date);
-                    },
+                    format: (date) => getISOWeekNumber(date),
                 },
             ];
-            g.config.scale_height = 85;
-            g.config.min_column_width = customColWidth
-                ? Math.max(14, customColWidth)
-                : Math.max(16, Math.round((46 * this.state.zoomLevel) / 100));
+            g.config.scale_height = 88;
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : 22;
         } else if (this.state.zoomLevel < 65) {
-            // 50% Zoom: Base unit is WEEK!
-            // Years, Quarters (1..4), Month names with number, and Weeks (just numbers, no S)
+            // 50% Zoom:
+            // Years, Quarters (1..4), Month names with number, and Weeks (numbers)
             g.config.scales = [
                 { unit: "year", step: 1, format: "%Y" },
                 {
                     unit: "month",
                     step: 3,
-                    format: (date) => {
-                        return Math.floor(date.getMonth() / 3) + 1;
-                    },
+                    format: (date) => Math.floor(date.getMonth() / 3) + 1,
                 },
                 {
                     unit: "month",
@@ -1478,17 +1464,14 @@ export class AllInOneTimelineAction extends Component {
                 {
                     unit: "week",
                     step: 1,
-                    format: (date) => {
-                        return getISOWeekNumber(date);
-                    },
+                    format: (date) => getISOWeekNumber(date),
                 },
             ];
-            g.config.scale_height = 85;
-            g.config.min_column_width = customColWidth
-                ? Math.max(16, customColWidth)
-                : Math.max(18, Math.round((50 * this.state.zoomLevel) / 100));
-        } else {
-            // Detailed View (>= 65%): Base unit is DAY!
+            g.config.scale_height = 88;
+            g.config.min_column_width = customColWidth ? Math.max(20, customColWidth) : 32;
+        } else if (this.state.zoomLevel < 100) {
+            // 75% Zoom:
+            // Years, Month names, Weeks (numbers), and Days
             g.config.scales = [
                 { unit: "year", step: 1, format: "%Y" },
                 {
@@ -1503,9 +1486,39 @@ export class AllInOneTimelineAction extends Component {
                 {
                     unit: "week",
                     step: 1,
-                    format: (date) => {
-                        return getISOWeekNumber(date);
+                    format: (date) => getISOWeekNumber(date),
+                },
+                {
+                    unit: "day",
+                    step: 1,
+                    format: "%j",
+                    css: (date) => {
+                        if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                        if (isWeekend(date)) return "weekend_scale_cell";
+                        return "";
                     },
+                },
+            ];
+            g.config.scale_height = 92;
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : 22;
+        } else {
+            // Detailed View (100%, 150%, 200%): Base unit is DAY!
+            const colW = Math.max(26, Math.round((30 * this.state.zoomLevel) / 100));
+            g.config.scales = [
+                { unit: "year", step: 1, format: "%Y" },
+                {
+                    unit: "month",
+                    step: 1,
+                    format: (date) => {
+                        const monthNum = date.getMonth() + 1;
+                        const monthName = LITHUANIAN_MONTHS[date.getMonth()];
+                        return `${monthName} (${monthNum})`;
+                    },
+                },
+                {
+                    unit: "week",
+                    step: 1,
+                    format: (date) => getISOWeekNumber(date),
                 },
                 {
                     unit: "day",
@@ -1526,9 +1539,7 @@ export class AllInOneTimelineAction extends Component {
                 },
             ];
             g.config.scale_height = 92;
-            g.config.min_column_width = customColWidth
-                ? Math.max(16, customColWidth)
-                : Math.max(20, Math.round((24 * this.state.zoomLevel) / 100));
+            g.config.min_column_width = customColWidth ? Math.max(20, customColWidth) : colW;
         }
     }
 
@@ -1910,6 +1921,7 @@ export class AllInOneTimelineAction extends Component {
         let marker = dataArea.querySelector(".custom_today_marker");
         try {
             const today = new Date();
+            today.setHours(12, 0, 0, 0);
             const leftPos = this.safePosFromDate(today);
             if (leftPos >= 0) {
                 if (!marker) {
@@ -2121,28 +2133,58 @@ export class AllInOneTimelineAction extends Component {
         }
     }
 
+    /**
+     * Helper to get the exact visible pixel width of the timeline chart area
+     */
+    getTimelineVisibleWidth() {
+        const g = this.gantt;
+        const scrollState = g && g.getScrollState ? g.getScrollState() : null;
+        if (scrollState && scrollState.inner_width > 50) {
+            return scrollState.inner_width;
+        }
+        if (this.ganttElement && this.ganttElement.el) {
+            const taskContainer = this.ganttElement.el.querySelector(".gantt_task") || this.ganttElement.el.querySelector(".gantt_data_area");
+            if (taskContainer && taskContainer.clientWidth > 50) {
+                return taskContainer.clientWidth;
+            }
+            const totalWidth = this.ganttElement.el.clientWidth;
+            const gridWidth = (g && g.config && g.config.grid_width) || 440;
+            if (totalWidth > gridWidth + 50) {
+                return totalWidth - gridWidth;
+            }
+        }
+        return 800;
+    }
+
+    /**
+     * Centers the viewport directly on today's red line marker.
+     */
     navigateToday() {
         if (!this.gantt) return;
+        const g = this.gantt;
         const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const state = this.gantt.getState ? this.gantt.getState() : {};
+        today.setHours(12, 0, 0, 0);
+
+        // Ensure today is within timeline range
+        const state = g.getState ? g.getState() : {};
         if (!state.min_date || !state.max_date || today < state.min_date || today > state.max_date) {
             this.ensureTimelineRange(today, today);
-            this.gantt.render();
+            g.render();
         }
 
-        const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-        const visibleWidth = dataArea ? dataArea.clientWidth : 800;
+        this.renderTodayMarker();
+
+        const visibleWidth = this.getTimelineVisibleWidth();
         const todayPx = this.safePosFromDate(today);
 
-        if (todayPx >= 0 && this.gantt.scrollTo) {
-            const targetX = Math.max(0, todayPx - Math.floor(visibleWidth / 2));
-            const currentY = this.gantt.getScrollState ? this.gantt.getScrollState().y : 0;
-            this.gantt.scrollTo(targetX, currentY);
-        } else if (this.gantt.showDate) {
-            this.gantt.showDate(today);
+        if (todayPx >= 0 && g.scrollTo) {
+            const targetX = Math.max(0, Math.round(todayPx - visibleWidth / 2));
+            const scrollState = g.getScrollState ? g.getScrollState() : { y: 0 };
+            g.scrollTo(targetX, scrollState.y);
+        } else if (g.showDate) {
+            g.showDate(today);
         }
-        this.renderTodayMarker();
+
         this.notification.add(_t("Fokusuota į šiandien"), { type: "info" });
     }
 
@@ -2196,8 +2238,8 @@ export class AllInOneTimelineAction extends Component {
     /**
      * Fit selected task/project/milestone or entire timeline to screen (Pritaikyti ekrane).
      * If a task, subtask, milestone or project is selected, fits that item's span to the screen.
-     * Automatically adjusts scale (week for short tasks, month for medium, year for projects)
-     * and calculates column widths so the timeline fits horizontally without unnecessary scrolling.
+     * Selects the best standard zoom level from ZOOM_STEPS so the item fits horizontally,
+     * and centers the item in the viewport.
      */
     fitToScreen() {
         if (!this.gantt) return;
@@ -2215,6 +2257,23 @@ export class AllInOneTimelineAction extends Component {
         if (targetTask && targetTask.start_date && targetTask.end_date) {
             minStart = new Date(targetTask.start_date);
             maxEnd = new Date(targetTask.end_date);
+            // If it's a project or parent task with children, encompass all descendants
+            const encompassDescendants = (parentId) => {
+                const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+                for (const childId of children) {
+                    const child = g.getTask(childId);
+                    if (child) {
+                        if (child.start_date && (!minStart || child.start_date < minStart)) {
+                            minStart = new Date(child.start_date);
+                        }
+                        if (child.end_date && (!maxEnd || child.end_date > maxEnd)) {
+                            maxEnd = new Date(child.end_date);
+                        }
+                        encompassDescendants(childId);
+                    }
+                }
+            };
+            encompassDescendants(targetTask.id);
         } else {
             // No task selected: encompass all tasks across the entire timeline
             if (g.eachTask) {
@@ -2234,95 +2293,40 @@ export class AllInOneTimelineAction extends Component {
             return;
         }
 
-        // Available visible pixel width for timeline data area
-        const dataArea = this.ganttElement.el
-            ? (this.ganttElement.el.querySelector(".gantt_data_area") || this.ganttElement.el.querySelector(".gantt_task"))
-            : null;
-        const totalContainerWidth = this.ganttElement.el ? this.ganttElement.el.clientWidth : 1200;
-        const gridWidth = g.config.grid_width || 440;
-        const visibleWidth = dataArea && dataArea.clientWidth > 100
-            ? dataArea.clientWidth
-            : Math.max(400, totalContainerWidth - gridWidth);
-        const usableWidth = Math.max(350, visibleWidth - 30); // 30px buffer
-
         const durationDays = Math.max(1, Math.round((maxEnd.getTime() - minStart.getTime()) / 86400000));
+        const midpointDate = new Date(minStart.getTime() + Math.round((maxEnd.getTime() - minStart.getTime()) / 2));
 
-        let targetScale = "year";
-        let targetZoom = 100;
-        let rangeStart = new Date(minStart);
-        let rangeEnd = new Date(maxEnd);
-        let colWidth = 40;
-
-        if (durationDays <= 5) {
-            // Very short task (1-5 days): switch to week view
-            targetScale = "week";
-            targetZoom = 100;
-            rangeStart.setDate(rangeStart.getDate() - 2);
-            rangeEnd.setDate(rangeEnd.getDate() + 3);
-            const totalUnits = Math.max(7, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
-            colWidth = Math.max(48, Math.floor(usableWidth / totalUnits));
-        } else if (durationDays <= 45) {
-            // Medium task or milestone (up to 45 days): switch to month view
-            targetScale = "month";
-            targetZoom = 100;
-            rangeStart.setDate(rangeStart.getDate() - 3);
-            rangeEnd.setDate(rangeEnd.getDate() + 4);
-            const totalUnits = Math.max(14, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
-            colWidth = Math.max(24, Math.floor(usableWidth / totalUnits));
-        } else if (durationDays <= 85) {
-            // 2-3 months: year view with detailed days
-            targetScale = "year";
-            targetZoom = 75;
-            rangeStart.setDate(rangeStart.getDate() - 5);
-            rangeEnd.setDate(rangeEnd.getDate() + 7);
-            const totalUnits = Math.max(30, Math.round((rangeEnd.getTime() - rangeStart.getTime()) / 86400000));
-            colWidth = Math.max(18, Math.floor(usableWidth / totalUnits));
-        } else if (durationDays <= 270) {
-            // 3 to 9 months (specifically 6 months): year view with WEEKS columns
-            targetScale = "year";
-            targetZoom = 45;
-            rangeStart.setDate(rangeStart.getDate() - 7);
-            const startDay = rangeStart.getDay();
-            const startOffset = (startDay === 0 ? -6 : 1) - startDay;
-            rangeStart.setDate(rangeStart.getDate() + startOffset);
-            rangeStart.setHours(0, 0, 0, 0);
-
-            rangeEnd.setDate(rangeEnd.getDate() + 14);
-            const endDay = rangeEnd.getDay();
-            const endOffset = (endDay === 0 ? 0 : 7 - endDay);
-            rangeEnd.setDate(rangeEnd.getDate() + endOffset);
-            rangeEnd.setHours(23, 59, 59, 999);
-
-            const totalWeeks = Math.max(4, Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (7 * 86400000)));
-            colWidth = Math.max(18, Math.floor(usableWidth / totalWeeks));
+        // Choose the best matching zoom level purely from our standard ZOOM_STEPS:
+        // [10, 15, 20, 35, 50, 75, 100, 150, 200]
+        let bestZoom = 100;
+        if (durationDays > 365 * 3) {
+            bestZoom = 10;
+        } else if (durationDays > 365 * 1.5) {
+            bestZoom = 15;
+        } else if (durationDays > 300) {
+            bestZoom = 20;
+        } else if (durationDays > 140) {
+            bestZoom = 35;
+        } else if (durationDays > 50) {
+            bestZoom = 50;
+        } else if (durationDays > 25) {
+            bestZoom = 75;
+        } else if (durationDays > 10) {
+            bestZoom = 100;
         } else {
-            // Long project (1 year, 2 years, 5+ years): year view with MONTHS columns
-            targetScale = "year";
-            targetZoom = durationDays > 730 ? 15 : 25;
-            rangeStart = new Date(rangeStart.getFullYear(), rangeStart.getMonth() - 1, 1, 0, 0, 0);
-            rangeEnd = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() + 2, 0, 23, 59, 59);
-
-            const totalMonths = Math.max(6, (rangeEnd.getFullYear() - rangeStart.getFullYear()) * 12 + (rangeEnd.getMonth() - rangeStart.getMonth()) + 1);
-            colWidth = Math.max(16, Math.floor(usableWidth / totalMonths));
+            bestZoom = 150;
         }
 
-        // Apply scale & date boundaries
-        this.state.zoomLevel = targetZoom;
-        g.config.start_date = rangeStart;
-        g.config.end_date = rangeEnd;
-        this.applyScaleConfig(colWidth);
-        g.render();
+        // Apply standard zoom level centered on the task or project midpoint
+        this.setZoom(bestZoom, midpointDate);
 
         if (targetTask) {
-            if (g.showTask) g.showTask(targetTask.id);
             if (g.selectTask) g.selectTask(targetTask.id);
             this.notification.add(
                 _t("Pritaikyta ekrane: ") + targetTask.text,
                 { type: "info" }
             );
         } else {
-            if (g.showDate) g.showDate(minStart);
-            if (g.scrollTo) g.scrollTo(0, 0);
             this.notification.add(
                 _t("Visas tvarkaraštis pritaikytas ekrane"),
                 { type: "info" }
