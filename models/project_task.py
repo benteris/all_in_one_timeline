@@ -8,6 +8,36 @@ _logger = logging.getLogger(__name__)
 class ProjectTask(models.Model):
     _inherit = "project.task"
 
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        for rec in records:
+            if rec.milestone_id and rec.date_deadline:
+                ms = rec.milestone_id
+                base = ms.planned_date_end or ms.deadline
+                rec_dl = rec.date_deadline.date() if isinstance(rec.date_deadline, datetime) else rec.date_deadline
+                if base and rec_dl > base and (not ms.deadline or rec_dl > ms.deadline):
+                    try:
+                        ms.sudo().write({"deadline": rec_dl})
+                    except Exception:
+                        pass
+        return records
+
+    def write(self, vals):
+        res = super().write(vals)
+        if "date_deadline" in vals or "milestone_id" in vals:
+            for rec in self:
+                if rec.milestone_id and rec.date_deadline:
+                    ms = rec.milestone_id
+                    base = ms.planned_date_end or ms.deadline
+                    rec_dl = rec.date_deadline.date() if isinstance(rec.date_deadline, datetime) else rec.date_deadline
+                    if base and rec_dl > base and (not ms.deadline or rec_dl > ms.deadline):
+                        try:
+                            ms.sudo().write({"deadline": rec_dl})
+                        except Exception:
+                            pass
+        return res
+
     @api.model
     def get_all_in_one_timeline_data(self, project_id=None, domain=None, date_start=None, date_end=None, user_id=None, model_name=None):
         """
@@ -407,24 +437,31 @@ class ProjectTask(models.Model):
             p_delay_days = 0
 
             p_date_deadline = getattr(p, "date_deadline", False)
+            candidate_p_deadlines = []
             if p_date_deadline:
+                candidate_p_deadlines.append(p_date_deadline if not isinstance(p_date_deadline, datetime) else p_date_deadline.date())
+            for t in p_tasks:
+                if t.date_deadline:
+                    candidate_p_deadlines.append(t.date_deadline.date() if isinstance(t.date_deadline, datetime) else t.date_deadline)
+            for m in p_milestones:
+                if m.deadline:
+                    candidate_p_deadlines.append(m.deadline if not isinstance(m.deadline, datetime) else m.deadline.date())
+
+            if candidate_p_deadlines:
                 p_has_deadline = True
-                p_dl_dt = datetime.combine(p_date_deadline, time(17, 0, 0)) if not isinstance(p_date_deadline, datetime) else p_date_deadline
+                p_effective_dl = max(candidate_p_deadlines)
+                p_dl_dt = datetime.combine(p_effective_dl, time(17, 0, 0))
                 p_deadline_str = p_dl_dt.strftime(dt_format)
 
                 # Midnight boundary for visual end of deadline on Gantt grid
-                if p_dl_dt.time() > time.min:
-                    gantt_p_dl_end = datetime.combine(p_dl_dt.date() + timedelta(days=1), time.min)
-                else:
-                    gantt_p_dl_end = datetime.combine(p_dl_dt.date(), time.min)
-
+                gantt_p_dl_end = datetime.combine(p_effective_dl + timedelta(days=1), time.min)
                 p_deadline_end_str = gantt_p_dl_end.strftime(dt_format)
 
-                if p_dl_dt.date() > p_end.date():
+                if p_effective_dl > p_end.date():
                     p_has_deadline_delay = True
-                    p_delay_days = (p_dl_dt.date() - p_end.date()).days
-                elif p_dl_dt.date() < p_end.date():
-                    p_delay_days = -(p_end.date() - p_dl_dt.date()).days
+                    p_delay_days = (p_effective_dl - p_end.date()).days
+                elif p_effective_dl < p_end.date():
+                    p_delay_days = -(p_end.date() - p_effective_dl).days
 
             gantt_tasks.append({
                 "id": p_key,
@@ -478,7 +515,10 @@ class ProjectTask(models.Model):
                     m_start = m_start.replace(hour=8, minute=0, second=0)
 
                 # Milestone Base End Date
-                if m.deadline:
+                m_planned_date_end = getattr(m, "planned_date_end", False)
+                if m_planned_date_end:
+                    m_end = datetime.combine(m.planned_date_end, time(17, 0, 0)) if not isinstance(m.planned_date_end, datetime) else m.planned_date_end
+                elif m.deadline:
                     m_end = datetime.combine(m.deadline, time(17, 0, 0)) if not isinstance(m.deadline, datetime) else m.deadline
                 else:
                     m_end = m_start + timedelta(days=7)
@@ -536,6 +576,48 @@ class ProjectTask(models.Model):
 
                 milestone_color = "#28a745" if m_is_done else "#f59e0b"
 
+                # Milestone Deadline and Automatic Delay Extension from Contained Tasks
+                m_deadline_str = False
+                m_deadline_end_str = False
+                m_has_deadline = False
+                m_has_deadline_delay = False
+                m_delay_days = 0
+
+                task_deadlines = []
+                for t in m_tasks:
+                    if t.date_deadline:
+                        t_dl = t.date_deadline.date() if isinstance(t.date_deadline, datetime) else t.date_deadline
+                        task_deadlines.append(t_dl)
+
+                m_dl_base = m.deadline if m.deadline else False
+                candidate_ms_deadlines = list(task_deadlines)
+                if m_dl_base:
+                    candidate_ms_deadlines.append(m_dl_base)
+
+                if candidate_ms_deadlines:
+                    m_has_deadline = True
+                    m_effective_dl = max(candidate_ms_deadlines)
+
+                    # Keep milestone database record in sync if tasks pushed deadline further
+                    if not m.deadline or m.deadline < m_effective_dl:
+                        try:
+                            m.sudo().write({"deadline": m_effective_dl})
+                        except Exception:
+                            pass
+
+                    m_dl_dt = datetime.combine(m_effective_dl, time(17, 0, 0))
+                    m_deadline_str = m_dl_dt.strftime(dt_format)
+
+                    # Midnight boundary for visual end of deadline on Gantt grid
+                    gantt_m_dl_end = datetime.combine(m_effective_dl + timedelta(days=1), time.min)
+                    m_deadline_end_str = gantt_m_dl_end.strftime(dt_format)
+
+                    if m_effective_dl > m_end.date():
+                        m_has_deadline_delay = True
+                        m_delay_days = (m_effective_dl - m_end.date()).days
+                    elif m_effective_dl < m_end.date():
+                        m_delay_days = -(m_end.date() - m_effective_dl).days
+
                 gantt_tasks.append({
                     "id": m_key,
                     "odoo_id": m.id,
@@ -547,6 +629,13 @@ class ProjectTask(models.Model):
                     "end_date": m_end_str,
                     "work_start_date": m_work_start_str,
                     "work_end_date": m_work_end_str,
+                    "planned_date_start": m_date_start.strftime(dt_format) if m_date_start else False,
+                    "planned_date_end": m_planned_date_end.strftime(dt_format) if m_planned_date_end else False,
+                    "date_deadline": m_deadline_str,
+                    "deadline_end": m_deadline_end_str,
+                    "has_deadline": m_has_deadline,
+                    "has_deadline_delay": m_has_deadline_delay,
+                    "delay_days": m_delay_days,
                     "progress": round(m_prog, 2),
                     "progress_percent": round(m_prog * 100, 1),
                     "allocated_hours": f"{round(m_allocated, 1)}h" if m_allocated else "",
@@ -554,10 +643,6 @@ class ProjectTask(models.Model):
                     "assignee_avatars": [],
                     "project_name": p.name or "",
                     "project_id": p.id,
-                    "date_deadline": m.deadline.strftime(dt_format) if m.deadline else False,
-                    "has_deadline": bool(m.deadline),
-                    "has_deadline_delay": False,
-                    "delay_days": 0,
                     "task_count": m.task_count,
                     "done_task_count": m.done_task_count,
                     "color": milestone_color,

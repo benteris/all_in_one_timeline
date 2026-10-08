@@ -564,26 +564,6 @@ export class AllInOneTimelineAction extends Component {
             const { workDays, workHours, calendarDays } = calculateWorkingDaysAndHours(effStart, effEnd);
             const durationDisplay = calendarDays || task.duration || 1;
 
-            if (task.is_milestone) {
-                return `
-                    <div class="gantt_tooltip_inner">
-                        <div class="tooltip_title"><i class="fa fa-flag text-warning me-1"></i>${task.text}</div>
-                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projekto gairė</span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Terminas:</span> <span class="tooltip_val">${endStr}</span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? "Pasiekta" : "Vykdoma"}</span></div>
-                        ${task.task_count !== undefined ? `<div class="tooltip_row"><span class="tooltip_label">Užduotys:</span> <span class="tooltip_val">${task.done_task_count || 0} / ${task.task_count}</span></div>` : ""}
-                        <div class="tooltip_progress_bar">
-                            <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
-                        </div>
-                    </div>
-                `;
-            }
-
             let deadlineHtml = "";
             let dlDate = null;
             if (task.date_deadline || task.has_deadline) {
@@ -613,6 +593,27 @@ export class AllInOneTimelineAction extends Component {
                 }
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. dienos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkDays} d.</span></div>`;
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours} val.</span></div>`;
+            }
+
+            if (task.is_milestone) {
+                return `
+                    <div class="gantt_tooltip_inner">
+                        <div class="tooltip_title"><i class="fa fa-flag text-warning me-1"></i>${task.text}</div>
+                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Projekto gairė</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
+                        ${deadlineHtml}
+                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? "Pasiekta" : "Vykdoma"}</span></div>
+                        ${task.task_count !== undefined ? `<div class="tooltip_row"><span class="tooltip_label">Užduotys:</span> <span class="tooltip_val">${task.done_task_count || 0} / ${task.task_count}</span></div>` : ""}
+                        <div class="tooltip_progress_bar">
+                            <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
+                        </div>
+                    </div>
+                `;
             }
 
             if (task.is_project) {

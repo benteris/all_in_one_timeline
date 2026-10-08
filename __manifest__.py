@@ -37,6 +37,7 @@ Pagrindinės funkcijos:
     "data": [
         "views/timeline_menus.xml",
         "views/project_project_views.xml",
+        "views/project_milestone_views.xml",
     ],
     "assets": {
         "web.assets_backend": [
