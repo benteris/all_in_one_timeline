@@ -154,11 +154,13 @@ class ProjectTask(models.Model):
                 pass
 
         # Auto-update allocated_hours from working hours (darbo valandos) if dates are modified
-        if ("planned_date_start" in vals or "planned_date_end" in vals) and "allocated_hours" not in vals:
+        if ("planned_date_start" in vals or "planned_date_end" in vals or "date_deadline" in vals) and "allocated_hours" not in vals:
             for rec in self:
-                s_val = vals.get("planned_date_start") or rec.planned_date_start
-                e_val = vals.get("planned_date_end") or rec.planned_date_end or vals.get("date_deadline") or rec.date_deadline
-                if s_val and e_val:
+                s_val = vals.get("planned_date_start") if "planned_date_start" in vals else rec.planned_date_start
+                e_val = vals.get("planned_date_end") if "planned_date_end" in vals else (rec.planned_date_end or (vals.get("date_deadline") if "date_deadline" in vals else rec.date_deadline))
+                if not s_val and not e_val:
+                    vals["allocated_hours"] = 0.0
+                elif s_val and e_val:
                     try:
                         s_dt = fields.Datetime.to_datetime(s_val) if isinstance(s_val, str) else s_val
                         e_dt = fields.Datetime.to_datetime(e_val) if isinstance(e_val, str) else e_val
@@ -304,24 +306,25 @@ class ProjectTask(models.Model):
             # User-assigned or default start
             if t.planned_date_start:
                 t_s = t.planned_date_start
+                if t_s.hour == 0 and t_s.minute == 0:
+                    t_s = t_s.replace(hour=8, minute=0, second=0)
             else:
-                t_s = t.date_assign or t.create_date or now
-
-            # If start time is 00:00 (midnight / unassigned time), set standard work start 08:00
-            if t_s.hour == 0 and t_s.minute == 0:
-                t_s = t_s.replace(hour=8, minute=0, second=0)
+                base_dt = t.date_assign or t.create_date or now
+                t_s = datetime.combine(base_dt.date(), time(8, 0, 0))
 
             # User-assigned or default end
             if t.planned_date_end:
                 t_e = t.planned_date_end
+                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 12 and t_e.minute == 0):
+                    t_e = t_e.replace(hour=17, minute=0, second=0)
             elif t.date_deadline:
                 t_e = t.date_deadline
+                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 12 and t_e.minute == 0):
+                    t_e = t_e.replace(hour=17, minute=0, second=0)
             else:
-                t_e = t_s + timedelta(days=3)
-
-            # If end time is 00:00 or 12:00 (Odoo default noon UTC), set standard work end 17:00
-            if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 12 and t_e.minute == 0):
-                t_e = t_e.replace(hour=17, minute=0, second=0)
+                # If task has NO end date and NO deadline:
+                # Takes span of exactly one day on the timeline (same day 17:00)
+                t_e = datetime.combine(t_s.date(), time(17, 0, 0))
 
             # Encompass subtasks: parent task can NEVER be smaller than subtasks inside it!
             subtasks = tasks.filtered(lambda s: s.parent_id.id == t.id)
@@ -333,10 +336,10 @@ class ProjectTask(models.Model):
                     if sub_e > t_e:
                         t_e = sub_e
 
-            if t_e <= t_s:
-                t_e = t_s.replace(hour=17, minute=0, second=0)
+            if t_e < t_s:
+                t_e = datetime.combine(t_s.date(), time(17, 0, 0))
                 if t_e <= t_s:
-                    t_e = (t_s + timedelta(days=1)).replace(hour=17, minute=0, second=0)
+                    t_e = datetime.combine(t_s.date() + timedelta(days=1), time(17, 0, 0))
 
             task_dates_cache[t.id] = (t_s, t_e)
             return t_s, t_e
@@ -391,26 +394,39 @@ class ProjectTask(models.Model):
             prog = metrics["progress"]
 
             t_start, t_end = get_task_dates(t)
+            has_dates = bool(t.planned_date_start or t.planned_date_end or t.date_deadline)
 
             # Auto-fill task allocated_hours directly from darbo valandos (working hours) if unset or 0.0
-            t_alloc = t.allocated_hours
-            if not t_alloc:
-                w_h = calculate_lithuanian_working_hours(t_start, t_end)
-                if w_h > 0:
-                    t_alloc = w_h
+            # If task has NO planned dates and NO deadline: it shouldn't show hours!
+            if not has_dates:
+                if t.allocated_hours:
                     try:
-                        t.sudo().write({"allocated_hours": w_h})
+                        t.sudo().write({"allocated_hours": 0.0})
                     except Exception:
                         pass
+                t_alloc = 0.0
+                allocated_str = ""
+            else:
+                t_alloc = t.allocated_hours
+                if not t_alloc:
+                    w_h = calculate_lithuanian_working_hours(t_start, t_end)
+                    if w_h > 0:
+                        t_alloc = w_h
+                        try:
+                            t.sudo().write({"allocated_hours": w_h})
+                        except Exception:
+                            pass
+                allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
 
             # Grid alignment for DHTMLX Gantt visual coordinates (midnight boundaries)
             gantt_start = datetime.combine(t_start.date(), time.min)
-            if t_end.time() > time.min:
-                gantt_end = datetime.combine(t_end.date() + timedelta(days=1), time.min)
+            if t_end.date() > t_start.date():
+                if t_end.time() > time.min:
+                    gantt_end = datetime.combine(t_end.date() + timedelta(days=1), time.min)
+                else:
+                    gantt_end = datetime.combine(t_end.date(), time.min)
             else:
-                gantt_end = datetime.combine(t_end.date(), time.min)
-
-            if gantt_end <= gantt_start:
+                # Exactly span of one day on Gantt grid (midnight to next midnight)
                 gantt_end = gantt_start + timedelta(days=1)
 
             t_start_str = gantt_start.strftime(dt_format)
@@ -517,7 +533,7 @@ class ProjectTask(models.Model):
                 elif dl_dt.date() < t_end.date():
                     delay_days = -(t_end.date() - dl_dt.date()).days
 
-            return {
+            res = {
                 "id": f"task_{t.id}",
                 "odoo_id": t.id,
                 "text": t.name or "Untitled Task",
@@ -535,6 +551,7 @@ class ProjectTask(models.Model):
                 "has_deadline": has_deadline,
                 "has_deadline_delay": has_deadline_delay,
                 "delay_days": delay_days,
+                "has_dates": has_dates,
                 "progress": 0.0 if is_locked else round(prog, 2),
                 "progress_percent": 0 if is_locked else round(prog * 100, 1),
                 "allocated_hours": allocated_str,
@@ -557,6 +574,9 @@ class ProjectTask(models.Model):
                 "is_done": False if is_locked else bool(t_is_done),
                 "readonly": False,
             }
+            if not has_dates:
+                res["duration"] = 1
+            return res
 
         def add_task_hierarchy(t, parent_key, proj_tasks):
             if t.id in added_task_ids:
