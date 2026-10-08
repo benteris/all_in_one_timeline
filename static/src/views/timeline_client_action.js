@@ -585,18 +585,21 @@ export class AllInOneTimelineAction extends Component {
                             : "fa fa-flag text-primary";
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
-                    const icon = (task.is_done || task.state === "1_done")
-                        ? "fa fa-check-circle text-success"
-                        : (task.state === "03_approved"
-                            ? "fa fa-circle text-success"
-                            : (task.state === "02_changes_requested"
-                                ? "fa fa-exclamation-triangle text-warning"
-                                : (task.state === "1_canceled"
-                                    ? "fa fa-times-circle text-danger"
-                                    : (task.state === "04_waiting_normal"
-                                        ? "fa fa-clock-o text-secondary"
-                                        : "fa fa-tasks text-muted"))));
-                    return `<i class="${icon} me-1"></i>${task.text}`;
+                    const icon = (task.is_locked || task.state === "locked")
+                        ? "fa fa-lock text-warning"
+                        : ((task.is_done || task.state === "1_done")
+                            ? "fa fa-check-circle text-success"
+                            : (task.state === "03_approved"
+                                ? "fa fa-circle text-success"
+                                : (task.state === "02_changes_requested"
+                                    ? "fa fa-exclamation-triangle text-warning"
+                                    : (task.state === "1_canceled"
+                                        ? "fa fa-times-circle text-danger"
+                                        : (task.state === "04_waiting_normal"
+                                            ? "fa fa-clock-o text-secondary"
+                                            : "fa fa-tasks text-muted")))));
+                    const titleAttr = (task.is_locked || task.state === "locked") ? ` title="${_t("Užrakinta užduotis (laukiama kitų užduočių)")}"` : "";
+                    return `<i class="${icon} me-1"${titleAttr}></i>${task.text}`;
                 },
             },
             {
@@ -715,6 +718,9 @@ export class AllInOneTimelineAction extends Component {
                 }
 
                 // Task / Subtask
+                if (t.is_locked || t.state === "locked") {
+                    return `<span style="color: #cbd5e1; background: #1e293b; padding: 2px 7px; border-radius: 4px; border: 1px solid #475569; font-weight: 700;"><i class="fa fa-lock text-warning me-1"></i>Užrakinta / Laukiama</span>`;
+                }
                 const state = t.state || (t.is_done ? "1_done" : "01_in_progress");
                 if (state === "1_done" || t.is_done) {
                     return `<span style="color: #16a34a; font-weight: 700;"><i class="fa fa-check-circle text-success me-1"></i>Atlikta (Done)</span>`;
@@ -782,12 +788,19 @@ export class AllInOneTimelineAction extends Component {
             const isSubtask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
             const typeLabel = isSubtask ? "Po-užduotis" : "Užduotis";
             const taskStatusHtml = getStatusBadge(task);
+            const isTaskLocked = task.is_locked || task.state === "locked";
 
             return `
                 <div class="gantt_tooltip_inner">
-                    <div class="tooltip_title"><i class="fa fa-tasks text-primary me-1"></i>${task.text}</div>
+                    <div class="tooltip_title"><i class="${isTaskLocked ? "fa fa-lock text-warning" : "fa fa-tasks text-primary"} me-1"></i>${task.text}</div>
                     <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">${typeLabel}</span></div>
                     <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${taskStatusHtml}</span></div>
+                    ${isTaskLocked && task.blocking_tasks ? `
+                        <div class="tooltip_row" style="color: #f59e0b; font-weight: 600;">
+                            <span class="tooltip_label" style="color: #f59e0b;"><i class="fa fa-lock me-1"></i>Blokuoja:</span>
+                            <span class="tooltip_val" style="color: #f59e0b;">${task.blocking_tasks}</span>
+                        </div>
+                    ` : ""}
                     ${task.stage_name ? `<div class="tooltip_row"><span class="tooltip_label">Etapas:</span> <span class="tooltip_val">${task.stage_name}</span></div>` : ""}
                     <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
                     ${task.milestone_name ? `<div class="tooltip_row"><span class="tooltip_label">Gairė:</span> <span class="tooltip_val">${task.milestone_name}</span></div>` : ""}
@@ -812,11 +825,13 @@ export class AllInOneTimelineAction extends Component {
             const isDone = task.is_done || percent >= 100 || task.state === "1_done";
             const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : "bar_prog_badge";
 
-            // Status icon: Done gets a checkmark, Changes Requested gets an exclamation triangle,
+            // Status icon: Locked gets a padlock, Done gets a checkmark, Changes Requested gets an exclamation triangle,
             // Cancelled gets a cross, Waiting gets a clock.
             // Approved gets NO checkmark (just solid green as requested).
             let statusIcon = "";
-            if (isDone) {
+            if (task.is_locked || task.state === "locked") {
+                statusIcon = `<i class="fa fa-lock text-warning me-1"></i>`;
+            } else if (isDone) {
                 statusIcon = `<i class="fa fa-check me-1"></i>`;
             } else if (task.state === "02_changes_requested") {
                 statusIcon = `<i class="fa fa-exclamation-triangle me-1"></i>`;
@@ -906,7 +921,9 @@ export class AllInOneTimelineAction extends Component {
 
             // Task / Subtask
             let tClass = "task_standard";
-            if (state === "1_done" || task.is_done || task.progress >= 1.0) {
+            if (task.is_locked || state === "locked") {
+                tClass += " task_locked task_state_locked";
+            } else if (state === "1_done" || task.is_done || task.progress >= 1.0) {
                 tClass += " task_done task_state_done";
             } else if (state === "03_approved") {
                 tClass += " task_approved task_state_approved";
@@ -1093,7 +1110,6 @@ export class AllInOneTimelineAction extends Component {
             if (g.eachTask) {
                 g.eachTask((other) => {
                     if (other.id === id) return;
-                    if (isDescendant(id, other.id)) return;
                     if (other.start_date) {
                         snapTimestamps.push(new Date(other.start_date).getTime());
                     }
@@ -1516,6 +1532,7 @@ export class AllInOneTimelineAction extends Component {
                         sourceId: sourceTask.odoo_id,
                         targetId: targetTask.odoo_id,
                     });
+                    await this.loadTimelineData();
                 } catch (err) {
                     this.notification.add(_t("Klaida pridedant ryšį: ") + err.message, { type: "danger" });
                 }
@@ -1535,6 +1552,7 @@ export class AllInOneTimelineAction extends Component {
                         sourceId: link.source_id,
                         targetId: link.target_id,
                     });
+                    await this.loadTimelineData();
                 } catch (err) {
                     console.error("Error removing link", err);
                 }

@@ -542,6 +542,24 @@
             box-shadow: 0 2px 4px rgba(100, 116, 139, 0.3) !important;
         }
 
+        /* Locked / Blocked (Dark Charcoal Steel with distinct security stripes) */
+        &.task_locked, &.task_state_locked {
+            background: repeating-linear-gradient(
+                -45deg,
+                #1e293b,
+                #1e293b 8px,
+                #334155 8px,
+                #334155 16px
+            ) !important;
+            border: 1.5px solid #0f172a !important;
+            box-shadow: 0 2px 5px rgba(15, 23, 42, 0.45) !important;
+            color: #ffffff !important;
+
+            .gantt_task_progress {
+                background-color: rgba(0, 0, 0, 0.35) !important;
+            }
+        }
+
         /* Done / Atlikta (GREEN WITH WHITE BORDER AROUND) */
         &.task_done, &.task_state_done, &.project_done, &.project_state_done, &.milestone_done, &.milestone_state_done {
             background-color: #16a34a !important;

@@ -10,6 +10,15 @@ class ProjectTask(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            if "stage_id" in vals and "state" not in vals:
+                try:
+                    stage = self.env["project.task.type"].browse(vals["stage_id"])
+                    stage_name = (stage.name or "").lower()
+                    if "lauk" in stage_name or "wait" in stage_name:
+                        vals["state"] = "04_waiting_normal"
+                except Exception:
+                    pass
         records = super().create(vals_list)
         for rec in records:
             if rec.milestone_id and rec.date_deadline:
@@ -24,6 +33,16 @@ class ProjectTask(models.Model):
         return records
 
     def write(self, vals):
+        if "stage_id" in vals and "state" not in vals:
+            try:
+                stage = self.env["project.task.type"].browse(vals["stage_id"])
+                stage_name = (stage.name or "").lower()
+                if "lauk" in stage_name or "wait" in stage_name:
+                    vals["state"] = "04_waiting_normal"
+                elif "vykd" in stage_name or "progress" in stage_name:
+                    vals["state"] = "01_in_progress"
+            except Exception:
+                pass
         res = super().write(vals)
         if "date_deadline" in vals or "milestone_id" in vals:
             for rec in self:
@@ -260,19 +279,38 @@ class ProjectTask(models.Model):
                 })
                 user_task_counts[u.id] = user_task_counts.get(u.id, 0) + 1
 
-            # Task status strictly driven by t.state:
+            # Check for uncompleted dependencies (Locked / Blocked task)
+            is_locked = False
+            blocking_tasks = []
+            if t.depend_on_ids:
+                for dep in t.depend_on_ids:
+                    dep_m = get_task_metrics(dep)
+                    if not dep_m.get("is_done") and dep.state != "1_done":
+                        is_locked = True
+                        blocking_tasks.append(dep.name or f"Task #{dep.id}")
+            elif getattr(t, "depend_on_count", 0) > getattr(t, "closed_depend_on_count", 0):
+                is_locked = True
+
+            stage_name = (t.stage_id.name or "").lower() if t.stage_id else ""
             t_state = t.state or "01_in_progress"
+
             if t_state == "1_canceled":
                 color = "#dc3545"  # Cancelled: red
             elif t_state == "1_done" or t_is_done:
                 color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
                 t_state = "1_done"
+            elif is_locked:
+                # LOCKED: Dark Charcoal Steel color with distinct lock styling
+                color = "#1e293b"
+                t_state = "locked"
             elif t_state == "03_approved":
                 color = "#10b981"  # Approved: just green
             elif t_state == "02_changes_requested":
                 color = "#f59e0b"  # Changes Requested: orange
-            elif t_state == "04_waiting_normal":
-                color = "#64748b"  # Waiting: slate/grey
+            elif t_state == "04_waiting_normal" or "lauk" in stage_name or "wait" in stage_name:
+                # Non-locked Laukiam: standard grey like in Odoo task statuses
+                color = "#64748b"
+                t_state = "04_waiting_normal"
             elif t_state == "01_in_progress":
                 color = "#71639e"  # In Progress: Purple
             else:
@@ -340,6 +378,8 @@ class ProjectTask(models.Model):
                 "milestone_name": t.milestone_id.name if t.milestone_id else "",
                 "color": color,
                 "state": t_state,
+                "is_locked": is_locked,
+                "blocking_tasks": ", ".join(blocking_tasks),
                 "is_project": False,
                 "is_milestone": False,
                 "is_done": bool(t_is_done),
