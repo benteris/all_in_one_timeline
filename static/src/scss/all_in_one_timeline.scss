@@ -416,6 +416,41 @@
             background-color: #5f5285 !important;
             border-color: #4a3e6a !important;
             box-shadow: 0 2px 4px rgba(95, 82, 133, 0.25) !important;
+
+            &.project_state_approved {
+                background-color: #10b981 !important;
+                border: 1px solid #059669 !important;
+                box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) !important;
+            }
+
+            &.project_state_changes_requested {
+                background-color: #f59e0b !important;
+                border: 1px solid #d97706 !important;
+                box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3) !important;
+            }
+
+            &.project_state_canceled {
+                background-color: #dc3545 !important;
+                border: 1px solid #b02a37 !important;
+                box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3) !important;
+            }
+
+            &.project_state_waiting {
+                background-color: #64748b !important;
+                border: 1px solid #475569 !important;
+                box-shadow: 0 2px 4px rgba(100, 116, 139, 0.3) !important;
+            }
+
+            &.project_done, &.project_state_done {
+                background-color: #16a34a !important;
+                border: 2px solid #ffffff !important;
+                box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
+
+                .gantt_task_progress {
+                    background-color: rgba(0, 0, 0, 0.12) !important;
+                    border-right: none;
+                }
+            }
         }
 
         /* Milestones (Warm Amber / Gold #f59e0b, Green when reached) - 100% STRAIGHT BARS */
@@ -454,10 +489,10 @@
                 border-radius: 5px 0 0 5px;
             }
 
-            &.milestone_done {
-                background-color: #28a745 !important;
-                border-color: #1e7e34 !important;
-                box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3) !important;
+            &.milestone_done, &.milestone_state_done {
+                background-color: #16a34a !important;
+                border: 2px solid #ffffff !important;
+                box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 
                 .gantt_task_progress {
                     background-color: rgba(0, 0, 0, 0.12) !important;
@@ -466,11 +501,47 @@
             }
         }
 
-        /* GREEN FOR DONE TASKS AND ENTIRE DONE PROJECTS */
-        &.task_done, &.project_done {
-            background-color: #28a745 !important;
-            border-color: #1e7e34 !important;
-            box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3) !important;
+        /* TASK STATUS STYLING */
+        /* In Progress (Purple / standard) */
+        &.task_in_progress, &.task_state_in_progress, &.task_standard {
+            background-color: #71639e !important;
+            border: 1px solid #5c4f82 !important;
+            box-shadow: 0 2px 4px rgba(113, 99, 158, 0.25) !important;
+        }
+
+        /* Approved (SOLID GREEN, standard border, NO white border) */
+        &.task_approved, &.task_state_approved {
+            background-color: #10b981 !important;
+            border: 1px solid #059669 !important;
+            box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) !important;
+        }
+
+        /* Changes Requested (Amber / Orange) */
+        &.task_changes_requested, &.task_state_changes_requested {
+            background-color: #f59e0b !important;
+            border: 1px solid #d97706 !important;
+            box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3) !important;
+        }
+
+        /* Cancelled (Red) */
+        &.task_canceled, &.task_state_canceled {
+            background-color: #dc3545 !important;
+            border: 1px solid #b02a37 !important;
+            box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3) !important;
+        }
+
+        /* Waiting (Slate / Grey) */
+        &.task_waiting, &.task_state_waiting {
+            background-color: #64748b !important;
+            border: 1px solid #475569 !important;
+            box-shadow: 0 2px 4px rgba(100, 116, 139, 0.3) !important;
+        }
+
+        /* Done / Atlikta (GREEN WITH WHITE BORDER AROUND) */
+        &.task_done, &.task_state_done, &.project_done, &.project_state_done, &.milestone_done, &.milestone_state_done {
+            background-color: #16a34a !important;
+            border: 2px solid #ffffff !important;
+            box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 
             .gantt_task_progress {
                 background-color: rgba(0, 0, 0, 0.12) !important;

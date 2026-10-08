@@ -260,15 +260,29 @@ class ProjectTask(models.Model):
                 })
                 user_task_counts[u.id] = user_task_counts.get(u.id, 0) + 1
 
-            # Task color: Green for done, Red for canceled, Grey for folded, Purple for in progress
-            if t_is_done:
-                color = "#28a745"  # Green for done
-            elif t.state == "1_canceled":
-                color = "#dc3545"  # Red for canceled
+            # Task status:
+            t_state = t.state or "01_in_progress"
+            stage_name = (t.stage_id.name or "").lower() if t.stage_id else ""
+            if t_state == "1_done" or t_is_done:
+                color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
+                t_state = "1_done"
+            elif t_state == "03_approved" or "approved" in stage_name or "patvirtinta" in stage_name:
+                color = "#10b981"  # Approved: just green
+                t_state = "03_approved"
+            elif t_state == "02_changes_requested" or "changes" in stage_name:
+                color = "#f59e0b"  # Changes Requested: orange
+                t_state = "02_changes_requested"
+            elif t_state == "1_canceled" or "cancel" in stage_name or "atšauk" in stage_name:
+                color = "#dc3545"  # Cancelled: red
+                t_state = "1_canceled"
+            elif t_state == "04_waiting_normal" or "lauk" in stage_name or "wait" in stage_name:
+                color = "#64748b"  # Waiting: slate/grey
+                t_state = "04_waiting_normal"
             elif t.stage_id and t.stage_id.fold:
-                color = "#6c757d"  # Grey
+                color = "#6c757d"  # Folded grey
             else:
-                color = "#71639e"  # Standard Odoo Community purple
+                color = "#71639e"  # In Progress Purple
+                t_state = "01_in_progress"
 
             allocated_str = f"{round(t.allocated_hours, 1)}h" if t.allocated_hours else ""
 
@@ -330,6 +344,7 @@ class ProjectTask(models.Model):
                 "milestone_id": t.milestone_id.id if t.milestone_id else False,
                 "milestone_name": t.milestone_id.name if t.milestone_id else "",
                 "color": color,
+                "state": t_state,
                 "is_project": False,
                 "is_milestone": False,
                 "is_done": bool(t_is_done),
@@ -427,7 +442,28 @@ class ProjectTask(models.Model):
                 p_is_done = False
                 p_prog = 0.0
 
-            project_color = "#28a745" if p_is_done else "#5f5285"
+            p_stage_name = (p.stage_id.name or "").lower() if p.stage_id else ""
+            p_update_status = p.last_update_status or ""
+
+            if p_is_done or "done" in p_stage_name or "completed" in p_stage_name or p_update_status == "done":
+                p_state = "1_done"
+                project_color = "#16a34a"
+                p_is_done = True
+            elif "approved" in p_stage_name or "patvirtinta" in p_stage_name:
+                p_state = "03_approved"
+                project_color = "#10b981"
+            elif "changes" in p_stage_name or "koreg" in p_stage_name or p_update_status in ("at_risk", "off_track"):
+                p_state = "02_changes_requested"
+                project_color = "#f59e0b"
+            elif "cancel" in p_stage_name or "atšauk" in p_stage_name:
+                p_state = "1_canceled"
+                project_color = "#dc3545"
+            elif "hold" in p_stage_name or "lauk" in p_stage_name or p_update_status == "on_hold":
+                p_state = "04_waiting_normal"
+                project_color = "#64748b"
+            else:
+                p_state = "01_in_progress"
+                project_color = "#5f5285"
 
             # Project Deadline and Delay Calculation
             p_deadline_str = False
@@ -489,6 +525,7 @@ class ProjectTask(models.Model):
                     }
                 ] if p.user_id else [],
                 "color": project_color,
+                "state": p_state,
                 "is_project": True,
                 "is_milestone": False,
                 "is_done": bool(p_is_done),
@@ -574,7 +611,12 @@ class ProjectTask(models.Model):
                     m_is_done = False
                     m_prog = 0.0
 
-                milestone_color = "#28a745" if m_is_done else "#f59e0b"
+                if m_is_done:
+                    m_state = "1_done"
+                    milestone_color = "#16a34a"
+                else:
+                    m_state = "01_in_progress"
+                    milestone_color = "#f59e0b"
 
                 # Milestone Deadline and Automatic Delay Extension from Contained Tasks
                 m_deadline_str = False
@@ -646,6 +688,7 @@ class ProjectTask(models.Model):
                     "task_count": m.task_count,
                     "done_task_count": m.done_task_count,
                     "color": milestone_color,
+                    "state": m_state,
                     "is_project": False,
                     "is_milestone": True,
                     "is_done": m_is_done,
@@ -747,10 +790,21 @@ class ProjectTask(models.Model):
                     milestone = milestone_model.browse(m_id)
                     if milestone.exists():
                         vals = {}
-                        if start_date and hasattr(milestone, "date_start"):
-                            vals["date_start"] = fields.Date.to_date(start_date)
-                        if end_date:
-                            vals["deadline"] = fields.Date.to_date(end_date)
+                        d_start = fields.Date.to_date(start_date) if start_date else False
+                        d_end = fields.Date.to_date(end_date) if end_date else False
+                        if d_start and hasattr(milestone, "date_start"):
+                            vals["date_start"] = d_start
+                        if d_end and hasattr(milestone, "planned_date_end"):
+                            vals["planned_date_end"] = d_end
+                        if d_end:
+                            task_deadlines = [
+                                t.date_deadline.date() if isinstance(t.date_deadline, datetime) else t.date_deadline
+                                for t in milestone.task_ids if t.date_deadline
+                            ]
+                            if task_deadlines and max(task_deadlines) > d_end:
+                                vals["deadline"] = max(task_deadlines)
+                            else:
+                                vals["deadline"] = d_end
                         if progress is not None:
                             p_val = float(progress)
                             if p_val >= 0.99:

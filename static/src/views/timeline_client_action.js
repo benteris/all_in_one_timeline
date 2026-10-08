@@ -506,14 +506,36 @@ export class AllInOneTimelineAction extends Component {
                 resize: true,
                 template: (task) => {
                     if (task.is_project) {
-                        const icon = task.is_done ? "fa fa-check-circle text-success" : "fa fa-folder-open text-primary";
+                        const icon = (task.is_done || task.state === "1_done")
+                            ? "fa fa-check-circle text-success"
+                            : (task.state === "03_approved"
+                                ? "fa fa-circle text-success"
+                                : (task.state === "02_changes_requested"
+                                    ? "fa fa-exclamation-triangle text-warning"
+                                    : (task.state === "1_canceled"
+                                        ? "fa fa-times-circle text-danger"
+                                        : (task.state === "04_waiting_normal"
+                                            ? "fa fa-clock-o text-secondary"
+                                            : "fa fa-folder-open text-primary"))));
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
                     if (task.is_milestone) {
-                        const icon = task.is_done ? "fa fa-flag-checkered text-success" : "fa fa-flag text-warning";
+                        const icon = (task.is_done || task.state === "1_done")
+                            ? "fa fa-check-circle text-success"
+                            : "fa fa-flag text-warning";
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
-                    const icon = task.is_done ? "fa fa-check-circle text-success" : "fa fa-tasks text-muted";
+                    const icon = (task.is_done || task.state === "1_done")
+                        ? "fa fa-check-circle text-success"
+                        : (task.state === "03_approved"
+                            ? "fa fa-circle text-success"
+                            : (task.state === "02_changes_requested"
+                                ? "fa fa-exclamation-triangle text-warning"
+                                : (task.state === "1_canceled"
+                                    ? "fa fa-times-circle text-danger"
+                                    : (task.state === "04_waiting_normal"
+                                        ? "fa fa-clock-o text-secondary"
+                                        : "fa fa-tasks text-muted"))));
                     return `<i class="${icon} me-1"></i>${task.text}`;
                 },
             },
@@ -659,8 +681,22 @@ export class AllInOneTimelineAction extends Component {
         // Task Bar Text & Progress Template (Reflects progress directly in the line itself and renders deadline delay bar)
         g.templates.task_text = (start, end, task) => {
             const percent = Math.round((task.progress || 0) * 100);
-            const isDone = task.is_done || percent >= 100;
+            const isDone = task.is_done || percent >= 100 || task.state === "1_done";
             const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : "bar_prog_badge";
+
+            // Status icon: Done gets a checkmark, Changes Requested gets an exclamation triangle,
+            // Cancelled gets a cross, Waiting gets a clock.
+            // Approved gets NO checkmark (just solid green as requested).
+            let statusIcon = "";
+            if (isDone) {
+                statusIcon = `<i class="fa fa-check me-1"></i>`;
+            } else if (task.state === "02_changes_requested") {
+                statusIcon = `<i class="fa fa-exclamation-triangle me-1"></i>`;
+            } else if (task.state === "1_canceled") {
+                statusIcon = `<i class="fa fa-times-circle me-1"></i>`;
+            } else if (task.state === "04_waiting_normal") {
+                statusIcon = `<i class="fa fa-clock-o me-1"></i>`;
+            }
 
             let delayBarHtml = "";
             if (task.has_deadline_delay && task.deadline_end) {
@@ -699,32 +735,62 @@ export class AllInOneTimelineAction extends Component {
 
             return `
                 <span class="bar_content_wrapper">
-                    <span class="bar_text">${task.text}</span>
+                    <span class="bar_text">${statusIcon}${task.text}</span>
                     <span class="${badgeClass}">${percent}%</span>
                 </span>
                 ${delayBarHtml}
             `;
         };
 
-        // Task Bar Styling Template (Marks done tasks, done milestones, and done projects green)
+        // Task Bar Styling Template (Applies status classes)
         g.templates.task_class = (start, end, task) => {
             const extraClass = task.has_deadline_delay ? " has_deadline_delay" : "";
+            const state = task.state || (task.is_done ? "1_done" : "01_in_progress");
+
             if (task.is_project) {
-                if (task.is_done || task.progress >= 1.0) {
-                    return "gantt_project project_done" + extraClass;
+                let pClass = "gantt_project";
+                if (state === "1_done" || task.is_done || task.progress >= 1.0) {
+                    pClass += " project_done project_state_done";
+                } else if (state === "03_approved") {
+                    pClass += " project_state_approved";
+                } else if (state === "02_changes_requested") {
+                    pClass += " project_state_changes_requested";
+                } else if (state === "1_canceled") {
+                    pClass += " project_state_canceled";
+                } else if (state === "04_waiting_normal") {
+                    pClass += " project_state_waiting";
+                } else {
+                    pClass += " project_state_in_progress";
                 }
-                return "gantt_project" + extraClass;
+                return pClass + extraClass;
             }
+
             if (task.is_milestone) {
-                if (task.is_done || task.progress >= 1.0) {
-                    return "timeline_milestone_bar milestone_done" + extraClass;
+                let mClass = "timeline_milestone_bar";
+                if (state === "1_done" || task.is_done || task.progress >= 1.0) {
+                    mClass += " milestone_done milestone_state_done";
+                } else {
+                    mClass += " milestone_state_in_progress";
                 }
-                return "timeline_milestone_bar" + extraClass;
+                return mClass + extraClass;
             }
-            if (task.is_done || task.progress >= 1.0 || task.state === "1_done") {
-                return "task_done" + extraClass;
+
+            // Task / Subtask
+            let tClass = "task_standard";
+            if (state === "1_done" || task.is_done || task.progress >= 1.0) {
+                tClass += " task_done task_state_done";
+            } else if (state === "03_approved") {
+                tClass += " task_approved task_state_approved";
+            } else if (state === "02_changes_requested") {
+                tClass += " task_changes_requested task_state_changes_requested";
+            } else if (state === "1_canceled") {
+                tClass += " task_canceled task_state_canceled";
+            } else if (state === "04_waiting_normal") {
+                tClass += " task_waiting task_state_waiting";
+            } else {
+                tClass += " task_in_progress task_state_in_progress";
             }
-            return "task_standard" + extraClass;
+            return tClass + extraClass;
         };
 
         // Mark Today, Weekends, and Lithuanian National Holidays in Scale Header (strictly for day units only)
@@ -1203,6 +1269,10 @@ export class AllInOneTimelineAction extends Component {
             const { workStart, workEnd } = computeWorkDates(task.start_date, task.end_date);
             task.work_start_date = formatOdooDateTime(workStart);
             task.work_end_date = formatOdooDateTime(workEnd);
+            if (task.is_milestone) {
+                task.planned_date_start = formatOdooDateTime(workStart);
+                task.planned_date_end = formatOdooDateTime(workEnd);
+            }
 
             updates.push({
                 id: task.id,
@@ -1225,6 +1295,10 @@ export class AllInOneTimelineAction extends Component {
                             const cWork = computeWorkDates(childTask.start_date, childTask.end_date);
                             childTask.work_start_date = formatOdooDateTime(cWork.workStart);
                             childTask.work_end_date = formatOdooDateTime(cWork.workEnd);
+                            if (childTask.is_milestone) {
+                                childTask.planned_date_start = formatOdooDateTime(cWork.workStart);
+                                childTask.planned_date_end = formatOdooDateTime(cWork.workEnd);
+                            }
 
                             updates.push({
                                 id: childTask.id,
@@ -1705,16 +1779,23 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
-     * Open standard Odoo Task Form (Full view with chatter, normal menus, breadcrumbs)
+     * Open standard Odoo Task Form Dialog
      */
     openTaskFormDialog(taskId) {
-        this.actionService.doAction({
-            type: "ir.actions.act_window",
-            res_model: "project.task",
-            res_id: taskId,
-            views: [[false, "form"]],
-            target: "current",
-        });
+        this.actionService.doAction(
+            {
+                type: "ir.actions.act_window",
+                res_model: "project.task",
+                res_id: taskId,
+                views: [[false, "form"]],
+                target: "new",
+            },
+            {
+                onClose: () => {
+                    this.loadTimelineData();
+                },
+            }
+        );
     }
 
     /**
@@ -1809,29 +1890,43 @@ export class AllInOneTimelineAction extends Component {
     }
 
     /**
-     * Open standard Odoo Milestone Form (Full view)
+     * Open standard Odoo Milestone Form Dialog
      */
     openMilestoneFormDialog(milestoneId) {
-        this.actionService.doAction({
-            type: "ir.actions.act_window",
-            res_model: "project.milestone",
-            res_id: milestoneId,
-            views: [[false, "form"]],
-            target: "current",
-        });
+        this.actionService.doAction(
+            {
+                type: "ir.actions.act_window",
+                res_model: "project.milestone",
+                res_id: milestoneId,
+                views: [[false, "form"]],
+                target: "new",
+            },
+            {
+                onClose: () => {
+                    this.loadTimelineData();
+                },
+            }
+        );
     }
 
     /**
-     * Open standard Odoo Project Form (Full view with normal menus, chatter, breadcrumbs)
+     * Open standard Odoo Project Form Dialog
      */
     openProjectFormDialog(projectId) {
-        this.actionService.doAction({
-            type: "ir.actions.act_window",
-            res_model: "project.project",
-            res_id: projectId,
-            views: [[false, "form"]],
-            target: "current",
-        });
+        this.actionService.doAction(
+            {
+                type: "ir.actions.act_window",
+                res_model: "project.project",
+                res_id: projectId,
+                views: [[false, "form"]],
+                target: "new",
+            },
+            {
+                onClose: () => {
+                    this.loadTimelineData();
+                },
+            }
+        );
     }
 
     /**
