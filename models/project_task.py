@@ -173,16 +173,41 @@ class ProjectTask(models.Model):
 
         res = super().write(vals)
 
-        # Milestone deadline check
-        if "date_deadline" in vals or "milestone_id" in vals:
+        # Parent task and Milestone deadline propagation
+        if "date_deadline" in vals or "planned_date_end" in vals or "parent_id" in vals or "milestone_id" in vals:
             for rec in self:
-                if rec.milestone_id and rec.date_deadline:
-                    ms = rec.milestone_id
-                    base = ms.planned_date_end or ms.deadline
-                    rec_dl = rec.date_deadline.date() if isinstance(rec.date_deadline, datetime) else rec.date_deadline
-                    if base and rec_dl > base and (not ms.deadline or rec_dl > ms.deadline):
+                child_target = rec.date_deadline or rec.planned_date_end
+                if not child_target:
+                    continue
+                child_dt = child_target if isinstance(child_target, datetime) else datetime.combine(child_target, time(17, 0, 0))
+                child_date = child_dt.date()
+
+                # 1. Propagate up the parent task hierarchy
+                curr_parent = rec.parent_id
+                while curr_parent:
+                    p_dl = curr_parent.date_deadline
+                    p_end = curr_parent.planned_date_end
+                    need_update = False
+                    if not p_dl or (isinstance(p_dl, datetime) and child_dt > p_dl) or (not isinstance(p_dl, datetime) and child_date > p_dl):
+                        need_update = True
+                    elif p_end and ((isinstance(p_end, datetime) and child_dt > p_end) or (not isinstance(p_end, datetime) and child_date > p_end)):
+                        need_update = True
+
+                    if need_update:
                         try:
-                            ms.sudo().write({"deadline": rec_dl})
+                            curr_parent.sudo().write({"date_deadline": child_dt})
+                        except Exception:
+                            pass
+                    curr_parent = curr_parent.parent_id
+
+                # 2. Propagate to milestone
+                if rec.milestone_id:
+                    ms = rec.milestone_id
+                    ms_dl = ms.deadline
+                    ms_end = getattr(ms, "planned_date_end", False) or ms.deadline
+                    if (not ms_dl or child_date > ms_dl) or (ms_end and child_date > ms_end):
+                        try:
+                            ms.sudo().write({"deadline": child_date})
                         except Exception:
                             pass
 
@@ -333,7 +358,7 @@ class ProjectTask(models.Model):
                     sub_s, sub_e = get_task_dates(sub)
                     if sub_s < t_s:
                         t_s = sub_s
-                    if sub_e > t_e:
+                    if not t.planned_date_end and sub_e > t_e:
                         t_e = sub_e
 
             if t_e < t_s:
@@ -386,7 +411,18 @@ class ProjectTask(models.Model):
             task_metrics_cache[t.id] = res
             return res
 
-
+        def get_all_descendant_deadlines(task_obj):
+            dls = []
+            child_tasks = tasks.filtered(lambda c: c.parent_id.id == task_obj.id)
+            for child in child_tasks:
+                if child.date_deadline:
+                    dls.append(child.date_deadline if isinstance(child.date_deadline, datetime) else datetime.combine(child.date_deadline, time(17, 0, 0)))
+                if child.planned_date_end:
+                    child_pe = child.planned_date_end if isinstance(child.planned_date_end, datetime) else datetime.combine(child.planned_date_end, time(17, 0, 0))
+                    if not task_obj.planned_date_end or child_pe > task_obj.planned_date_end:
+                        dls.append(child_pe)
+                dls.extend(get_all_descendant_deadlines(child))
+            return dls
 
         def build_task_dict(t, parent_key):
             metrics = get_task_metrics(t)
@@ -506,17 +542,32 @@ class ProjectTask(models.Model):
 
             allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
 
-            # Deadline and Delay Calculation
+            # Deadline and Delay Calculation (encompassing all descendant subtask deadlines)
             deadline_str = False
             deadline_end_str = False
             has_deadline = False
             has_deadline_delay = False
             delay_days = 0
 
+            child_dls = get_all_descendant_deadlines(t)
+            candidate_dls = []
             if t.date_deadline:
+                candidate_dls.append(t.date_deadline if isinstance(t.date_deadline, datetime) else datetime.combine(t.date_deadline, time(17, 0, 0)))
+            if child_dls:
+                candidate_dls.append(max(child_dls))
+
+            if candidate_dls:
+                effective_dl = max(candidate_dls)
                 has_deadline = True
-                dl_dt = t.date_deadline
+                dl_dt = effective_dl
                 deadline_str = dl_dt.strftime(dt_format)
+
+                # Keep database record in sync if child tasks pushed deadline further
+                if not t.date_deadline or (isinstance(t.date_deadline, datetime) and t.date_deadline < effective_dl) or (not isinstance(t.date_deadline, datetime) and t.date_deadline < effective_dl.date()):
+                    try:
+                        t.sudo().write({"date_deadline": effective_dl})
+                    except Exception:
+                        pass
 
                 # Midnight boundary for visual end of deadline on Gantt grid
                 if dl_dt.time() > time.min:

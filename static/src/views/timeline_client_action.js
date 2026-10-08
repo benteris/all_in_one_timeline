@@ -1502,6 +1502,25 @@ export class AllInOneTimelineAction extends Component {
                             g.updateTask(u.id);
                         }
                     }
+
+                    // Propagate extended deadline to parent tasks in Gantt view in real-time
+                    let currParentId = task.parent;
+                    while (currParentId && g.isTaskExists(currParentId)) {
+                        const parent = g.getTask(currParentId);
+                        const childEnd = task.deadline_end || task.end_date;
+                        if (childEnd && parent.end_date) {
+                            const cDate = childEnd instanceof Date ? childEnd : new Date(String(childEnd).replace(/-/g, "/"));
+                            const pDate = parent.end_date instanceof Date ? parent.end_date : new Date(String(parent.end_date).replace(/-/g, "/"));
+                            if (cDate > pDate) {
+                                parent.deadline_end = childEnd;
+                                parent.has_deadline = true;
+                                parent.has_deadline_delay = true;
+                                parent.delay_days = Math.max(1, Math.round((cDate.getTime() - pDate.getTime()) / 86400000));
+                                g.updateTask(currParentId);
+                            }
+                        }
+                        currParentId = parent.parent;
+                    }
                     this.renderTodayMarker();
                 }
             } catch (err) {
