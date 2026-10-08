@@ -43,6 +43,19 @@ export const LITHUANIAN_MONTHS_SHORT = [
 
 export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250];
 
+export const ZOOM_PX_PER_DAY = {
+    250: 80,
+    200: 64,
+    150: 48,
+    100: 32,
+    75: 24,
+    50: 18,
+    35: 32 / 7,
+    20: 24 / 7,
+    15: 18 / 7,
+    10: 14 / 7,
+};
+
 export const LITHUANIAN_MONTHS_GENITIVE = [
     "sausio",
     "vasario",
@@ -442,6 +455,7 @@ export class AllInOneTimelineAction extends Component {
         }
 
         const g = this.gantt;
+        window.activeGantt = this.gantt;
 
         // Configure Lithuanian locale safely without touching g.date functions
         if (g.locale && g.locale.date) {
@@ -768,24 +782,12 @@ export class AllInOneTimelineAction extends Component {
                 return true;
             }
 
-            // User specifically clicked the row in the left sidebar grid to find / locate a task/project
+            // User clicked the row in the left sidebar grid: fit to screen and center project/task
             if (id && g.isTaskExists(id)) {
-                const task = g.getTask(id);
-                if (task && task.start_date) {
-                    const dataArea = this.ganttElement.el ? this.ganttElement.el.querySelector(".gantt_data_area") : null;
-                    const visibleWidth = dataArea ? dataArea.clientWidth : 800;
-                    if (g.scrollTo) {
-                        const pos = this.safePosFromDate(task.start_date);
-                        if (pos >= 0) {
-                            const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
-                            const isVisible = (pos >= scrollState.x + 40 && pos <= scrollState.x + visibleWidth - 40);
-                            if (!isVisible) {
-                                const targetX = Math.max(0, pos - Math.floor(visibleWidth / 2));
-                                g.scrollTo(targetX, scrollState.y);
-                            }
-                        }
-                    }
-                    this.renderTodayMarker();
+                const isTreeIcon = e && e.target && (e.target.closest(".gantt_tree_icon") || e.target.closest(".gantt_tree_indent"));
+                const isActionBtn = e && e.target && e.target.closest(".grid_action_btn");
+                if (!isTreeIcon && !isActionBtn) {
+                    this.fitToScreen(id);
                 }
             }
             return true;
@@ -1185,7 +1187,6 @@ export class AllInOneTimelineAction extends Component {
 
             try {
                 await this.orm.call("project.task", "save_timeline_batch_schedule", [updates]);
-                this.notification.add(_t("Tvarkaraštis atnaujintas"), { type: "success" });
 
                 if (needsScaleExpand) {
                     this.ensureTimelineRange(task.start_date, task.end_date);
@@ -1246,7 +1247,6 @@ export class AllInOneTimelineAction extends Component {
                         sourceId: sourceTask.odoo_id,
                         targetId: targetTask.odoo_id,
                     });
-                    this.notification.add(_t("Priklausomybė pridėta"), { type: "info" });
                 } catch (err) {
                     this.notification.add(_t("Klaida pridedant ryšį: ") + err.message, { type: "danger" });
                 }
@@ -1266,7 +1266,6 @@ export class AllInOneTimelineAction extends Component {
                         sourceId: link.source_id,
                         targetId: link.target_id,
                     });
-                    this.notification.add(_t("Priklausomybė pašalinta"), { type: "info" });
                 } catch (err) {
                     console.error("Error removing link", err);
                 }
@@ -1413,17 +1412,19 @@ export class AllInOneTimelineAction extends Component {
             css: () => "",
         };
 
-        // 3. Month scale: Mėnuo (Lithuanian month name across all scales)
+        // 3. Month scale: Mėnuo (First number then name across all zoom levels: (10) Spalis)
         let monthFormat;
         if (zoom <= 15) {
-            monthFormat = (date) => LITHUANIAN_MONTHS_SHORT[date.getMonth()];
-        } else if (zoom < 50) {
-            monthFormat = (date) => LITHUANIAN_MONTHS[date.getMonth()];
+            monthFormat = (date) => {
+                const monthNum = String(date.getMonth() + 1).padStart(2, "0");
+                const shortName = LITHUANIAN_MONTHS_SHORT[date.getMonth()];
+                return `(${monthNum}) ${shortName}`;
+            };
         } else {
             monthFormat = (date) => {
                 const monthNum = String(date.getMonth() + 1).padStart(2, "0");
                 const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                return `${monthName} (${monthNum})`;
+                return `(${monthNum}) ${monthName}`;
             };
         }
         const monthScale = {
@@ -1926,24 +1927,18 @@ export class AllInOneTimelineAction extends Component {
         try {
             if (action.type === "schedule") {
                 await this.orm.call("project.task", "save_timeline_batch_schedule", [action.previous]);
-                this.notification.add(
-                    _t("Atšauktas veiksmas: ") + (action.description || ""),
-                    { type: "info" }
-                );
                 await this.loadTimelineData();
             } else if (action.type === "link_add") {
                 await this.orm.call("project.task", "remove_timeline_dependency", [
                     action.sourceId,
                     action.targetId,
                 ]);
-                this.notification.add(_t("Atšauktas ryšio pridėjimas"), { type: "info" });
                 await this.loadTimelineData();
             } else if (action.type === "link_delete") {
                 await this.orm.call("project.task", "add_timeline_dependency", [
                     action.sourceId,
                     action.targetId,
                 ]);
-                this.notification.add(_t("Atstatytas ryšys"), { type: "info" });
                 await this.loadTimelineData();
             }
         } catch (err) {
@@ -2144,8 +2139,6 @@ export class AllInOneTimelineAction extends Component {
         } else if (g.showDate) {
             g.showDate(today);
         }
-
-        this.notification.add(_t("Fokusuota į šiandien"), { type: "info" });
     }
 
     navigatePrevious() {
@@ -2201,14 +2194,24 @@ export class AllInOneTimelineAction extends Component {
      * Selects the best standard zoom level from ZOOM_STEPS so the item fits horizontally,
      * and centers the item in the viewport.
      */
-    fitToScreen() {
+    /**
+     * Fit selected task/project/milestone or entire timeline to screen (Pritaikyti ekrane).
+     * If a task, subtask, milestone or project is selected, fits that item's span to the screen.
+     * Selects the best standard zoom level from ZOOM_STEPS based on visible screen width so the item fits horizontally,
+     * and centers the item in the viewport.
+     */
+    fitToScreen(targetId = null) {
         if (!this.gantt) return;
         const g = this.gantt;
 
-        const selectedId = g.getSelectedId ? g.getSelectedId() : null;
         let targetTask = null;
-        if (selectedId && g.isTaskExists(selectedId)) {
-            targetTask = g.getTask(selectedId);
+        if (targetId && g.isTaskExists(targetId)) {
+            targetTask = g.getTask(targetId);
+        } else {
+            const selectedId = g.getSelectedId ? g.getSelectedId() : null;
+            if (selectedId && g.isTaskExists(selectedId)) {
+                targetTask = g.getTask(selectedId);
+            }
         }
 
         let minStart = null;
@@ -2223,11 +2226,13 @@ export class AllInOneTimelineAction extends Component {
                 for (const childId of children) {
                     const child = g.getTask(childId);
                     if (child) {
-                        if (child.start_date && (!minStart || child.start_date < minStart)) {
-                            minStart = new Date(child.start_date);
+                        if (child.start_date) {
+                            const cs = new Date(child.start_date);
+                            if (!minStart || cs < minStart) minStart = cs;
                         }
-                        if (child.end_date && (!maxEnd || child.end_date > maxEnd)) {
-                            maxEnd = new Date(child.end_date);
+                        if (child.end_date) {
+                            const ce = new Date(child.end_date);
+                            if (!maxEnd || ce > maxEnd) maxEnd = ce;
                         }
                         encompassDescendants(childId);
                     }
@@ -2238,64 +2243,45 @@ export class AllInOneTimelineAction extends Component {
             // No task selected: encompass all tasks across the entire timeline
             if (g.eachTask) {
                 g.eachTask((t) => {
-                    if (t.start_date && (!minStart || t.start_date < minStart)) {
-                        minStart = new Date(t.start_date);
+                    if (t.start_date) {
+                        const s = new Date(t.start_date);
+                        if (!minStart || s < minStart) minStart = s;
                     }
-                    if (t.end_date && (!maxEnd || t.end_date > maxEnd)) {
-                        maxEnd = new Date(t.end_date);
+                    if (t.end_date) {
+                        const e = new Date(t.end_date);
+                        if (!maxEnd || e > maxEnd) maxEnd = e;
                     }
                 });
             }
         }
 
         if (!minStart || !maxEnd) {
-            this.notification.add(_t("Nėra užduočių pritaikymui ekrane"), { type: "warning" });
             return;
         }
 
         const durationDays = Math.max(1, Math.round((maxEnd.getTime() - minStart.getTime()) / 86400000));
         const midpointDate = new Date(minStart.getTime() + Math.round((maxEnd.getTime() - minStart.getTime()) / 2));
 
-        // Choose the best matching zoom level purely from our standard ZOOM_STEPS:
-        // [10, 15, 20, 35, 50, 75, 100, 150, 200, 250]
-        let bestZoom = 100;
-        if (durationDays > 365 * 3) {
-            bestZoom = 10;
-        } else if (durationDays > 365 * 1.5) {
-            bestZoom = 15;
-        } else if (durationDays > 300) {
-            bestZoom = 20;
-        } else if (durationDays > 140) {
-            bestZoom = 35;
-        } else if (durationDays > 50) {
-            bestZoom = 50;
-        } else if (durationDays > 25) {
-            bestZoom = 75;
-        } else if (durationDays > 10) {
-            bestZoom = 100;
-        } else if (durationDays > 4) {
-            bestZoom = 150;
-        } else if (durationDays > 2) {
-            bestZoom = 200;
-        } else {
-            bestZoom = 250;
+        // Dynamically find the best matching zoom level from predefined ZOOM_STEPS based on visible width:
+        const visibleWidth = this.getTimelineVisibleWidth();
+        const candidateZooms = [250, 200, 150, 100, 75, 50, 35, 20, 15, 10];
+        let bestZoom = 10;
+        for (const z of candidateZooms) {
+            const pxPerDay = ZOOM_PX_PER_DAY[z] || 32;
+            const estimatedPx = durationDays * pxPerDay;
+            if (estimatedPx <= Math.max(300, visibleWidth * 1.05)) {
+                bestZoom = z;
+                break;
+            }
+        }
+
+        if (targetTask) {
+            if (g.selectTask) g.selectTask(targetTask.id);
+            if (g.showTask) g.showTask(targetTask.id);
         }
 
         // Apply standard zoom level centered on the task or project midpoint
         this.setZoom(bestZoom, midpointDate);
-
-        if (targetTask) {
-            if (g.selectTask) g.selectTask(targetTask.id);
-            this.notification.add(
-                _t("Pritaikyta ekrane: ") + targetTask.text,
-                { type: "info" }
-            );
-        } else {
-            this.notification.add(
-                _t("Visas tvarkaraštis pritaikytas ekrane"),
-                { type: "info" }
-            );
-        }
     }
 
     /**
