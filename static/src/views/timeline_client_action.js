@@ -731,7 +731,7 @@ export class AllInOneTimelineAction extends Component {
                 if (state === "04_waiting_normal") {
                     return `<span style="color: #64748b; font-weight: 700;"><i class="fa fa-clock-o text-secondary me-1"></i>Laukiama (Waiting)</span>`;
                 }
-                return `<span style="color: #71639e; font-weight: 700;"><i class="fa fa-tasks text-muted me-1"></i>Vykdoma (In Progress)</span>`;
+                return `<span style="color: #71639e; font-weight: 700;"><i class="fa fa-tasks me-1" style="color: #71639e;"></i>Vykdoma (In Progress)</span>`;
             };
 
             if (task.is_milestone) {

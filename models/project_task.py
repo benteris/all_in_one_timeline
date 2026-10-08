@@ -260,28 +260,23 @@ class ProjectTask(models.Model):
                 })
                 user_task_counts[u.id] = user_task_counts.get(u.id, 0) + 1
 
-            # Task status:
+            # Task status strictly driven by t.state:
             t_state = t.state or "01_in_progress"
-            stage_name = (t.stage_id.name or "").lower() if t.stage_id else ""
-            if t_state == "1_done" or t_is_done:
+            if t_state == "1_canceled":
+                color = "#dc3545"  # Cancelled: red
+            elif t_state == "1_done" or t_is_done:
                 color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
                 t_state = "1_done"
-            elif t_state == "03_approved" or "approved" in stage_name or "patvirtinta" in stage_name:
+            elif t_state == "03_approved":
                 color = "#10b981"  # Approved: just green
-                t_state = "03_approved"
-            elif t_state == "02_changes_requested" or "changes" in stage_name:
+            elif t_state == "02_changes_requested":
                 color = "#f59e0b"  # Changes Requested: orange
-                t_state = "02_changes_requested"
-            elif t_state == "1_canceled" or "cancel" in stage_name or "atšauk" in stage_name:
-                color = "#dc3545"  # Cancelled: red
-                t_state = "1_canceled"
-            elif t_state == "04_waiting_normal" or "lauk" in stage_name or "wait" in stage_name:
+            elif t_state == "04_waiting_normal":
                 color = "#64748b"  # Waiting: slate/grey
-                t_state = "04_waiting_normal"
-            elif t.stage_id and t.stage_id.fold:
-                color = "#6c757d"  # Folded grey
+            elif t_state == "01_in_progress":
+                color = "#71639e"  # In Progress: Purple
             else:
-                color = "#71639e"  # In Progress Purple
+                color = "#71639e"
                 t_state = "01_in_progress"
 
             allocated_str = f"{round(t.allocated_hours, 1)}h" if t.allocated_hours else ""
