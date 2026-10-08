@@ -60,19 +60,28 @@
         }
 
         .btn_timeline {
-            border-radius: 4px;
             font-size: 12px;
-            padding: 5px 10px;
             font-weight: 500;
+            line-height: 1.5;
+            padding: 4px 10px;
+            height: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             border: 1px solid #ced4da;
             background-color: #ffffff;
             color: #495057;
             transition: all 0.15s ease;
 
             &:hover {
-                background-color: #e9ecef;
+                background-color: #f1f3f5;
                 border-color: #adb5bd;
                 color: #212529;
+            }
+
+            &:focus, &:active {
+                box-shadow: none !important;
+                border-color: #71639e;
             }
 
             &:disabled, &[disabled] {
@@ -89,6 +98,41 @@
                 border-color: #71639e !important;
                 color: #ffffff !important;
                 box-shadow: 0 1px 3px rgba(113, 99, 158, 0.3);
+            }
+        }
+
+        // Standalone buttons (not in .btn-group)
+        button.btn_timeline:not(.btn-group *) {
+            border-radius: 4px;
+        }
+
+        // Seamless button grouping across all toolbar button groups
+        .btn-group {
+            display: inline-flex;
+            vertical-align: middle;
+
+            > .btn_timeline,
+            > .btn-group > .btn_timeline {
+                border-radius: 0;
+            }
+
+            > .btn_timeline:first-child,
+            > .btn-group:first-child > .btn_timeline {
+                border-top-left-radius: 4px !important;
+                border-bottom-left-radius: 4px !important;
+            }
+
+            > .btn_timeline:last-child,
+            > .btn-group:last-child > .btn_timeline {
+                border-top-right-radius: 4px !important;
+                border-bottom-right-radius: 4px !important;
+            }
+
+            > .btn_timeline + .btn_timeline,
+            > .btn_timeline + .btn-group,
+            > .btn-group + .btn_timeline,
+            > .btn-group + .btn-group {
+                margin-left: -1px;
             }
         }
     }
@@ -538,15 +582,27 @@ div.gantt_tooltip {
     background: #ffffff !important;
     color: #212529 !important;
     border: 1px solid #ced4da !important;
-    border-radius: 6px !important;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18) !important;
     padding: 12px 16px !important;
     font-size: 12px !important;
     line-height: 1.5 !important;
-    max-width: 300px !important;
+    min-width: 280px !important;
+    max-width: 480px !important;
+    width: max-content !important;
+    box-sizing: border-box !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    white-space: normal !important;
     z-index: 99999 !important;
     pointer-events: none !important;
     user-select: none !important;
+
+    .gantt_tooltip_inner {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
 
     .tooltip_title {
         font-size: 14px !important;
@@ -555,21 +611,35 @@ div.gantt_tooltip {
         margin-bottom: 8px !important;
         border-bottom: 1px solid #e9ecef !important;
         padding-bottom: 6px !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        white-space: normal !important;
+        line-height: 1.4 !important;
     }
 
     .tooltip_row {
         display: flex;
         justify-content: space-between;
-        margin-bottom: 4px;
+        align-items: flex-start;
+        gap: 12px;
+        margin-bottom: 5px;
+        width: 100%;
 
         .tooltip_label {
             color: #6c757d;
             font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .tooltip_val {
             font-weight: 600;
             color: #212529;
+            text-align: right;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            white-space: normal;
+            flex-grow: 1;
         }
     }
 
