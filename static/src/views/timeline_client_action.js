@@ -467,6 +467,10 @@ export class AllInOneTimelineAction extends Component {
                 this.ganttElement.el.removeEventListener("wheel", this.onWheelHandler);
                 this.onWheelHandler = null;
             }
+            if (this._wheelResetTimer) {
+                clearTimeout(this._wheelResetTimer);
+                this._wheelResetTimer = null;
+            }
             if (this.gantt) {
                 if (this.eventIds && this.eventIds.length) {
                     for (const id of this.eventIds) {
@@ -1769,20 +1773,54 @@ export class AllInOneTimelineAction extends Component {
             this.onWheelHandler = (e) => {
                 if (e.ctrlKey) {
                     e.preventDefault();
-                    let focalUnderCursor = null;
-                    const dataArea = this.ganttElement.el
-                        ? (this.ganttElement.el.querySelector(".gantt_data_area") || this.ganttElement.el.querySelector(".gantt_task"))
-                        : null;
-                    if (dataArea && g.dateFromPos) {
-                        const rect = dataArea.getBoundingClientRect();
-                        const scrollX = g.getScrollState ? g.getScrollState().x : 0;
-                        const mouseXInData = e.clientX - rect.left + scrollX;
-                        focalUnderCursor = g.dateFromPos(mouseXInData);
+
+                    const now = Date.now();
+                    if (this._lastWheelTime && (now - this._lastWheelTime) < 70) {
+                        return; // Rate limit zoom steps during continuous wheel spin
                     }
+                    this._lastWheelTime = now;
+
+                    const taskViewport = this.ganttElement.el
+                        ? (this.ganttElement.el.querySelector(".gantt_task") || this.ganttElement.el.querySelector(".gantt_data_area"))
+                        : null;
+
+                    // If a continuous wheel gesture is active within 400ms, maintain the anchor date and screen position
+                    if (!this._wheelAnchorDate || !this._wheelResetTimer) {
+                        if (taskViewport && g.dateFromPos) {
+                            const rect = taskViewport.getBoundingClientRect();
+                            const relX = e.clientX - rect.left;
+                            const visWidth = taskViewport.clientWidth || rect.width;
+                            if (relX >= 0 && relX <= visWidth) {
+                                this._wheelFocalOffset = relX;
+                                const scrollX = g.getScrollState ? g.getScrollState().x : 0;
+                                const mouseXInData = relX + scrollX;
+                                const d = g.dateFromPos(mouseXInData);
+                                if (d instanceof Date && !isNaN(d.getTime())) {
+                                    this._wheelAnchorDate = d;
+                                }
+                            } else {
+                                this._wheelFocalOffset = null;
+                                this._wheelAnchorDate = null;
+                            }
+                        }
+                    }
+
+                    if (this._wheelResetTimer) {
+                        clearTimeout(this._wheelResetTimer);
+                    }
+                    this._wheelResetTimer = setTimeout(() => {
+                        this._wheelAnchorDate = null;
+                        this._wheelFocalOffset = null;
+                        this._wheelResetTimer = null;
+                    }, 400);
+
+                    const focalDate = this._wheelAnchorDate;
+                    const focalOffset = this._wheelFocalOffset;
+
                     if (e.deltaY < 0) {
-                        this.zoomIn(focalUnderCursor);
+                        this.zoomIn(focalDate, focalOffset);
                     } else if (e.deltaY > 0) {
-                        this.zoomOut(focalUnderCursor);
+                        this.zoomOut(focalDate, focalOffset);
                     }
                 }
             };
@@ -2524,19 +2562,19 @@ export class AllInOneTimelineAction extends Component {
         await this.loadTimelineData();
     }
 
-    zoomIn(focalDate = null) {
+    zoomIn(focalDate = null, focalOffset = null) {
         const validFocalDate = (focalDate instanceof Date && !isNaN(focalDate.getTime())) ? focalDate : null;
         const nextStep = ZOOM_STEPS.find((step) => step > this.state.zoomLevel);
-        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[ZOOM_STEPS.length - 1], validFocalDate);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[ZOOM_STEPS.length - 1], validFocalDate, null, null, focalOffset);
     }
 
-    zoomOut(focalDate = null) {
+    zoomOut(focalDate = null, focalOffset = null) {
         const validFocalDate = (focalDate instanceof Date && !isNaN(focalDate.getTime())) ? focalDate : null;
         const nextStep = [...ZOOM_STEPS].reverse().find((step) => step < this.state.zoomLevel);
-        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], validFocalDate);
+        this.setZoom(nextStep !== undefined ? nextStep : ZOOM_STEPS[0], validFocalDate, null, null, focalOffset);
     }
 
-    setZoom(level, customFocalDate = null, customScrollY = null, itemSpan = null) {
+    setZoom(level, customFocalDate = null, customScrollY = null, itemSpan = null, customFocalOffset = null) {
         const g = this.gantt;
         if (!g) {
             this.state.zoomLevel = level;
@@ -2599,10 +2637,13 @@ export class AllInOneTimelineAction extends Component {
                 });
             }
 
-            this.ensureTimelineRange(focalDate, (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate);
+            this.ensureTimelineRange(
+                (itemSpan && itemSpan.minStart) ? itemSpan.minStart : focalDate,
+                (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate
+            );
             g.render();
 
-            // 3. Center viewport smoothly around focalDate or itemSpan
+            // 3. Center viewport smoothly around focalDate, itemSpan, or cursor anchor
             const applyScroll = () => {
                 if (!g.scrollTo) return;
                 const curVisWidth = this.getTimelineVisibleWidth();
@@ -2623,7 +2664,10 @@ export class AllInOneTimelineAction extends Component {
                 if (focalDate) {
                     const newPos = this.safePosFromDate(focalDate);
                     if (newPos >= 0) {
-                        const targetScrollX = Math.max(0, Math.round(newPos - curVisWidth / 2));
+                        const offset = (typeof customFocalOffset === "number" && !isNaN(customFocalOffset))
+                            ? customFocalOffset
+                            : Math.floor(curVisWidth / 2);
+                        const targetScrollX = Math.max(0, Math.round(newPos - offset));
                         g.scrollTo(targetScrollX, targetScrollY);
                     }
                 }
@@ -2804,8 +2848,8 @@ export class AllInOneTimelineAction extends Component {
         // We constrain the item's duration to at most 75% of visibleWidth so there is balanced margin on both sides
         const visibleWidth = this.getTimelineVisibleWidth();
         const targetMaxPx = Math.max(250, Math.floor(visibleWidth * 0.75));
-        const candidateZooms = [250, 200, 150, 100, 75, 50, 35, 20, 15, 10];
-        let bestZoom = 10;
+        const candidateZooms = [...ZOOM_STEPS].reverse();
+        let bestZoom = ZOOM_STEPS[0];
         for (const z of candidateZooms) {
             const pxPerDay = ZOOM_PX_PER_DAY[z] || 32;
             const estimatedPx = durationDays * pxPerDay;
