@@ -1,4 +1,5 @@
 from odoo import models, fields, api, _
+from odoo.tools.misc import format_datetime
 from markupsafe import Markup
 import logging
 
@@ -79,8 +80,14 @@ class ProjectTaskPauseWizard(models.TransientModel):
 
         # 2. Post to Chatter with reason and duration
         user_name = self.env.user.name
+        tz = self.env.user.tz or self.env.context.get("tz") or "Europe/Vilnius"
+        try:
+            pause_time_str = format_datetime(self.env, now, tz=tz, dt_format="yyyy-MM-dd HH:mm:ss")
+        except Exception:
+            pause_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
         chatter_body = (
-            f"⏸️ <b>Darbai pristabdyti (Task Paused):</b> {user_name} pristabdė darbą.<br/>"
+            f"⏸️ <b>Darbai pristabdyti (Task Paused):</b> {user_name} pristabdė darbą [{pause_time_str}].<br/>"
             f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_hours} val. ({mins} min.)<br/>"
             f"• <b>Priežastis:</b> {self.reason}"
         )

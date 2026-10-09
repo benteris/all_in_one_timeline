@@ -1,9 +1,24 @@
 from datetime import datetime, timedelta, time, date
 from odoo import api, fields, models, _
+from odoo.tools.misc import format_datetime
 from markupsafe import Markup
 import logging
 
 _logger = logging.getLogger(__name__)
+
+
+def format_user_datetime(env, dt, dt_format="yyyy-MM-dd HH:mm:ss"):
+    """
+    Formats a UTC datetime into a localized string matching the user's active timezone.
+    Falls back to 'Europe/Vilnius' or UTC if no user timezone is set.
+    """
+    if not dt:
+        return ""
+    tz = env.user.tz or env.context.get("tz") or "Europe/Vilnius"
+    try:
+        return format_datetime(env, dt, tz=tz, dt_format=dt_format)
+    except Exception:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_lithuanian_holidays(year):
@@ -135,12 +150,16 @@ class ProjectTask(models.Model):
             "timer_start": now,
             "is_timer_running": True,
         }
+        # If task has no planned start date or it was planned in the future, set planned start to now
+        if not self.planned_date_start or self.planned_date_start > now:
+            vals["planned_date_start"] = now
+
         if self.state in ("04_waiting_normal", "draft"):
             vals["state"] = "01_in_progress"
         self.write(vals)
 
         user_name = self.env.user.name
-        time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        time_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm:ss")
         self.message_post(
             body=Markup(f"⏱️ <b>Darbai pradėti (Timer Started):</b> {user_name} pradėjo darbą ties užduotimi [{time_str}]."),
             subtype_xmlid="mail.mt_note",
@@ -205,9 +224,10 @@ class ProjectTask(models.Model):
         }
 
         # 2. Date logic:
-        # "if planned date is set and i finishe task within palned date whne i press finish button it should update palnedned dates if date ending date if date wasnt setp befor if date was set and lets say afters finish i went over planned date it should set new deadline, idea is to see how much i surpass time i can see how much i was late."
+        # Preserve actual start time (planned_date_start or timer_start or now)
+        act_start = self.planned_date_start or self.timer_start or now
         if not self.planned_date_start or self.planned_date_start > now:
-            vals["planned_date_start"] = now
+            vals["planned_date_start"] = act_start
 
         p_end = self.planned_date_end
         date_late = False
@@ -254,11 +274,13 @@ class ProjectTask(models.Model):
         self._propagate_deadline_upward()
 
         # 3. Post finish note to Chatter
+        now_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm")
         finish_msg = f"🏁 <b>Užduotis baigta (Task Finished):</b> {user_name} pažymėjo užduotį kaip atliktą (100%).<br/>"
         if date_late:
-            finish_msg += f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> Planuota pabaiga: {p_end.strftime('%Y-%m-%d %H:%M')}, Naujas terminas / faktinė pabaiga: {now.strftime('%Y-%m-%d %H:%M')} (viršyta ~{late_hours} val.). Laiko juostoje rodomas vėlavimo indikatorius."
+            p_end_str = format_user_datetime(self.env, p_end, "yyyy-MM-dd HH:mm")
+            finish_msg += f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> Planuota pabaiga: {p_end_str}, Naujas terminas / faktinė pabaiga: {now_str} (viršyta ~{late_hours} val.). Laiko juostoje rodomas vėlavimo indikatorius."
         else:
-            finish_msg += f"✨ <b>Užbaigta laiku:</b> Pabaigos data atnaujinta į {now.strftime('%Y-%m-%d %H:%M')}."
+            finish_msg += f"✨ <b>Užbaigta laiku:</b> Pabaigos data atnaujinta į {now_str}."
 
         self.message_post(body=Markup(finish_msg), subtype_xmlid="mail.mt_note")
         return True
@@ -619,7 +641,7 @@ class ProjectTask(models.Model):
             prog = metrics["progress"]
 
             t_start, t_end = get_task_dates(t)
-            has_dates = bool(t.planned_date_start or t.planned_date_end or t.date_deadline)
+            has_dates = bool((t.planned_date_start and t.planned_date_end) or t.date_deadline)
 
             # Auto-fill task allocated_hours directly from darbo valandos (working hours) if unset or 0.0
             # If task has NO planned dates and NO deadline: it shouldn't show hours!
