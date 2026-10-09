@@ -1790,8 +1790,12 @@ export class AllInOneTimelineAction extends Component {
                         ? (this.ganttElement.el.querySelector(".gantt_task") || this.ganttElement.el.querySelector(".gantt_data_area"))
                         : null;
 
-                    // If a continuous wheel gesture is active within 400ms, maintain the anchor date and screen position
+                    // If a continuous wheel gesture is active within 400ms, maintain anchor date and screen position
                     if (!this._wheelAnchorDate || !this._wheelResetTimer) {
+                        const taskIdUnderMouse = g.locate ? g.locate(e) : null;
+                        if (taskIdUnderMouse && g.isTaskExists(taskIdUnderMouse)) {
+                            g.selectTask(taskIdUnderMouse);
+                        }
                         if (taskViewport && g.dateFromPos) {
                             const rect = taskViewport.getBoundingClientRect();
                             const relX = e.clientX - rect.left;
@@ -2019,8 +2023,9 @@ export class AllInOneTimelineAction extends Component {
                 step: minuteStep,
                 format: (date) => {
                     const m = date.getMinutes();
-                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-                    return `:${pad(m)}`;
+                    // Display intervals as 15, 30, 45, 60 as requested
+                    const mark = ((m + 15) % 60) === 0 ? 60 : (m + 15);
+                    return `${mark}`;
                 },
                 css: (date) => {
                     const h = date.getHours();
@@ -2446,14 +2451,21 @@ export class AllInOneTimelineAction extends Component {
         if (!minDate) minDate = new Date(today);
         if (!maxDate) maxDate = new Date(today);
 
-        // Always include today in boundaries so today line is within scale
+        // Include today in boundaries if appropriate (for high zoom >= 300%, only if today is within 21 days of tasks to avoid immense column bloat)
         let effectiveMin = new Date(minDate);
         let effectiveMax = new Date(maxDate);
-        if (today < effectiveMin) {
-            effectiveMin = new Date(today);
-        }
-        if (today > effectiveMax) {
-            effectiveMax = new Date(today);
+        const isHighZoom = (this.state.zoomLevel >= 300);
+        const distFromToday = Math.min(
+            Math.abs(today.getTime() - minDate.getTime()),
+            Math.abs(today.getTime() - maxDate.getTime())
+        );
+        if (!isHighZoom || distFromToday <= 21 * 86400000) {
+            if (today < effectiveMin) {
+                effectiveMin = new Date(today);
+            }
+            if (today > effectiveMax) {
+                effectiveMax = new Date(today);
+            }
         }
 
         let startDate;
@@ -2667,10 +2679,48 @@ export class AllInOneTimelineAction extends Component {
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
             const targetScrollY = (customScrollY !== null && customScrollY !== undefined) ? customScrollY : scrollState.y;
 
-            // 1. Identify focal anchor date (valid Date only)
+            // 1. Identify focal anchor (Task or Date)
+            let focalTask = null;
             let focalDate = (customFocalDate instanceof Date && !isNaN(customFocalDate.getTime())) ? customFocalDate : null;
 
-            if (itemSpan && itemSpan.minStart instanceof Date && !isNaN(itemSpan.minStart.getTime())) {
+            // Check if user has an active/selected task
+            const selectedId = g.getSelectedId ? g.getSelectedId() : null;
+            if (selectedId && g.isTaskExists(selectedId)) {
+                focalTask = g.getTask(selectedId);
+            }
+
+            // If no selected task, find the task visible closest to the horizontal center of the viewport
+            if (!focalTask && g.eachTask) {
+                const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
+                let closestDist = Infinity;
+                g.eachTask((t) => {
+                    if (!t || t.type === "project") return;
+                    const pos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(t) : null;
+                    if (pos && pos.left !== undefined) {
+                        const tCenter = pos.left + (pos.width / 2);
+                        if (pos.left + pos.width >= scrollState.x - 50 && pos.left <= scrollState.x + visibleWidth + 50) {
+                            const dist = Math.abs(tCenter - currentCenterPx);
+                            if (dist < closestDist) {
+                                closestDist = dist;
+                                focalTask = t;
+                            }
+                        }
+                    }
+                });
+            }
+
+            // If a focal task was identified, determine anchor date
+            if (focalTask) {
+                if (level >= 300 && focalTask.work_start_date) {
+                    const ws = new Date(focalTask.work_start_date.replace(/-/g, "/"));
+                    if (!isNaN(ws.getTime())) {
+                        focalDate = ws;
+                    }
+                }
+                if (!focalDate && focalTask.start_date) {
+                    focalDate = new Date(focalTask.start_date);
+                }
+            } else if (itemSpan && itemSpan.minStart instanceof Date && !isNaN(itemSpan.minStart.getTime())) {
                 focalDate = itemSpan.minStart;
             } else if (!focalDate && g.dateFromPos) {
                 const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
@@ -2717,12 +2767,12 @@ export class AllInOneTimelineAction extends Component {
             }
 
             this.ensureTimelineRange(
-                (itemSpan && itemSpan.minStart) ? itemSpan.minStart : focalDate,
-                (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate
+                (itemSpan && itemSpan.minStart) ? itemSpan.minStart : (focalTask && focalTask.start_date ? focalTask.start_date : focalDate),
+                (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : (focalTask && focalTask.end_date ? focalTask.end_date : focalDate)
             );
             g.render();
 
-            // 3. Center viewport smoothly around focalDate, itemSpan, or cursor anchor
+            // 3. Center viewport smoothly around focalTask, focalDate, itemSpan, or cursor anchor
             const applyScroll = () => {
                 if (!g.scrollTo) return;
                 const curVisWidth = this.getTimelineVisibleWidth();
@@ -2735,6 +2785,24 @@ export class AllInOneTimelineAction extends Component {
                         const margin = Math.max(30, Math.floor((curVisWidth - spanW) / 2));
                         const targetScrollX = Math.max(0, Math.round(sPx - margin));
                         g.scrollTo(targetScrollX, targetScrollY);
+                        this.renderTodayMarker();
+                        return;
+                    }
+                }
+
+                if (focalTask && g.isTaskExists(focalTask.id)) {
+                    const updatedTask = g.getTask(focalTask.id);
+                    const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(updatedTask) : null;
+                    if (taskPos && taskPos.left !== undefined) {
+                        const taskCenter = taskPos.left + (taskPos.width / 2);
+                        const offset = (typeof customFocalOffset === "number" && !isNaN(customFocalOffset))
+                            ? customFocalOffset
+                            : Math.floor(curVisWidth / 2);
+                        const targetScrollX = Math.max(0, Math.round(taskCenter - offset));
+                        const finalScrollY = (customScrollY !== null && customScrollY !== undefined)
+                            ? customScrollY
+                            : (taskPos.top !== undefined ? Math.max(0, taskPos.top - 80) : targetScrollY);
+                        g.scrollTo(targetScrollX, finalScrollY);
                         this.renderTodayMarker();
                         return;
                     }
@@ -2921,12 +2989,13 @@ export class AllInOneTimelineAction extends Component {
             return;
         }
 
-        const durationDays = Math.max(1, Math.round((maxEnd.getTime() - minStart.getTime()) / 86400000));
+        const durationMs = Math.max(900000, maxEnd.getTime() - minStart.getTime()); // minimum 15 min
+        const durationDays = durationMs / 86400000.0;
 
         // Dynamically find the best matching zoom level from predefined ZOOM_STEPS based on visible width:
-        // We constrain the item's duration to at most 75% of visibleWidth so there is balanced margin on both sides
+        // Constrain the item's duration to at most 70% of visibleWidth so there is balanced margin on both sides
         const visibleWidth = this.getTimelineVisibleWidth();
-        const targetMaxPx = Math.max(250, Math.floor(visibleWidth * 0.75));
+        const targetMaxPx = Math.max(200, Math.floor(visibleWidth * 0.70));
         const candidateZooms = [...ZOOM_STEPS].reverse();
         let bestZoom = ZOOM_STEPS[0];
         for (const z of candidateZooms) {
