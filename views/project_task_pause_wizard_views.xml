@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_project_task_pause_wizard_form" model="ir.ui.view">
+        <field name="name">project.task.pause.wizard.form</field>
+        <field name="model">project.task.pause.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Pristabdyti užduotį / Pause Task">
+                <group>
+                    <field name="task_id" options="{'no_open': True}"/>
+                    <field name="duration_display"/>
+                    <field name="reason" placeholder="Nurodykite priežastį (pvz., Pietų pertrauka, Kitas skubus darbas, Laukiama kliento patvirtinimo...)" required="1"/>
+                </group>
+                <footer>
+                    <button name="action_confirm_pause"
+                            string="⏸️ Pristabdyti ir įrašyti į žiniaraštį"
+                            type="object"
+                            class="btn btn-warning fw-bold"/>
+                    <button string="Atšaukti"
+                            class="btn btn-secondary"
+                            special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

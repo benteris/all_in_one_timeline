@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_task_form2_inherit_timer" model="ir.ui.view">
+        <field name="name">project.task.form.inherit.timer</field>
+        <field name="model">project.task</field>
+        <field name="inherit_id" ref="project.view_task_form2"/>
+        <field name="arch" type="xml">
+            <!-- Header buttons on top of Task / Subtask form -->
+            <xpath expr="//header" position="inside">
+                <field name="is_timer_running" invisible="1"/>
+                <button name="action_timer_start"
+                        type="object"
+                        string="▶️ Pradėti"
+                        class="btn btn-success fw-bold me-1"
+                        invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
+                <button name="action_timer_pause"
+                        type="object"
+                        string="⏸️ Pristabdyti"
+                        class="btn btn-warning fw-bold me-1"
+                        invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
+                <button name="action_timer_finish"
+                        type="object"
+                        string="🏁 Baigti"
+                        class="btn btn-primary fw-bold me-2"
+                        invisible="state in ['1_done', '1_canceled']"/>
+                <button name="action_timer_reopen"
+                        type="object"
+                        string="🔄 Atnaujinti"
+                        class="btn btn-secondary me-2"
+                        invisible="state not in ['1_done', '1_canceled']"/>
+            </xpath>
+
+            <!-- Action buttons inside Sub-tasks tab list view rows -->
+            <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list" position="inside">
+                <field name="is_timer_running" column_invisible="True"/>
+                <button name="action_timer_start"
+                        type="object"
+                        title="Pradėti / Start"
+                        icon="fa-play text-success"
+                        invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
+                <button name="action_timer_pause"
+                        type="object"
+                        title="Pristabdyti / Pause"
+                        icon="fa-pause text-warning"
+                        invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
+                <button name="action_timer_finish"
+                        type="object"
+                        title="Baigti / Finish"
+                        icon="fa-check text-primary"
+                        invisible="state in ['1_done', '1_canceled']"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

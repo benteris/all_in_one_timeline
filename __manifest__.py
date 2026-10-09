@@ -35,16 +35,19 @@ Pagrindinės funkcijos:
 * Detalus valandinis mastelis (300%, 400%, 500%) su darbo valandų (8:00 - 17:00) vizualiniu išskyrimu ir valandinių užduočių vilkimu realiuoju laiku.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "1.5",
+    "version": "1.6",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",
     "license": "LGPL-3",
-    "depends": ["project"],
+    "depends": ["project", "hr_timesheet"],
     "data": [
-        "views/timeline_menus.xml",
+        "security/ir.model.access.csv",
+        "views/project_task_pause_wizard_views.xml",
+        "views/project_task_views.xml",
         "views/project_project_views.xml",
         "views/project_milestone_views.xml",
+        "views/timeline_menus.xml",
     ],
     "assets": {
         "web.assets_backend": [

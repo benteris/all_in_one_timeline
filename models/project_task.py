@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, time, date
-from odoo import api, fields, models
+from odoo import api, fields, models, _
+from markupsafe import Markup
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -121,6 +122,155 @@ def calculate_lithuanian_working_hours(start_dt, end_dt):
 
 class ProjectTask(models.Model):
     _inherit = "project.task"
+
+    timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
+    is_timer_running = fields.Boolean("Laikmatis veikia / Timer Running", default=False, readonly=True, copy=False)
+
+    def action_timer_start(self):
+        self.ensure_one()
+        if self.is_timer_running:
+            return False
+        now = fields.Datetime.now()
+        vals = {
+            "timer_start": now,
+            "is_timer_running": True,
+        }
+        if self.state in ("04_waiting_normal", "draft"):
+            vals["state"] = "01_in_progress"
+        self.write(vals)
+
+        user_name = self.env.user.name
+        time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        self.message_post(
+            body=Markup(f"⏱️ <b>Darbai pradėti (Timer Started):</b> {user_name} pradėjo darbą ties užduotimi [{time_str}]."),
+            subtype_xmlid="mail.mt_note",
+        )
+        return True
+
+    def action_timer_pause(self):
+        self.ensure_one()
+        return {
+            "name": _("Pristabdyti užduotį / Pause Task"),
+            "type": "ir.actions.act_window",
+            "res_model": "project.task.pause.wizard",
+            "view_mode": "form",
+            "target": "new",
+            "context": {
+                "default_task_id": self.id,
+                "default_timer_start": self.timer_start or fields.Datetime.now(),
+            },
+        }
+
+    def action_timer_finish(self):
+        self.ensure_one()
+        now = fields.Datetime.now()
+        user_name = self.env.user.name
+
+        # 1. If timer was running, register the elapsed time to Timesheets
+        if self.is_timer_running and self.timer_start:
+            diff_sec = max(0, (now - self.timer_start).total_seconds())
+            elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2))
+            emp = self.env.user.employee_id
+            if not emp and "hr.employee" in self.env:
+                emp = self.env["hr.employee"].search([("user_id", "=", self.env.uid)], limit=1)
+            if not emp and "hr.employee" in self.env:
+                emp = self.env["hr.employee"].search([], limit=1)
+
+            company = self.company_id or (emp and emp.company_id) or self.env.company
+            if self.project_id and "account.analytic.line" in self.env:
+                try:
+                    self.env["account.analytic.line"].create({
+                        "name": _("Darbas baigtas (Finish)"),
+                        "task_id": self.id,
+                        "project_id": self.project_id.id,
+                        "employee_id": emp.id if emp else False,
+                        "user_id": emp.user_id.id if emp and emp.user_id else self.env.uid,
+                        "company_id": company.id if company else False,
+                        "date": fields.Date.today(),
+                        "unit_amount": elapsed_hours,
+                    })
+                except Exception as e:
+                    _logger.warning("Could not create timesheet on finish: %s", e)
+
+            mins = int(diff_sec // 60)
+            self.message_post(
+                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_hours} val. ({mins} min.)."),
+                subtype_xmlid="mail.mt_note",
+            )
+
+        vals = {
+            "is_timer_running": False,
+            "timer_start": False,
+            "state": "1_done",
+        }
+
+        # 2. Date logic:
+        # "if planned date is set and i finishe task within palned date whne i press finish button it should update palnedned dates if date ending date if date wasnt setp befor if date was set and lets say afters finish i went over planned date it should set new deadline, idea is to see how much i surpass time i can see how much i was late."
+        if not self.planned_date_start:
+            vals["planned_date_start"] = now
+
+        p_end = self.planned_date_end
+        date_late = False
+        late_hours = 0.0
+
+        if not p_end:
+            # Ending date wasn't set before: set ending date = now
+            vals["planned_date_end"] = now
+            if not self.date_deadline:
+                vals["date_deadline"] = now
+        else:
+            # Planned date WAS set before:
+            if now <= p_end:
+                # Finished within planned date: update ending date to now
+                vals["planned_date_end"] = now
+                if not self.date_deadline or self.date_deadline < now:
+                    vals["date_deadline"] = now
+            else:
+                # Finished after planned date (surpassed planned date!):
+                # Keep planned_date_end as the planned date, but set new deadline to now!
+                vals["date_deadline"] = now
+                date_late = True
+                late_hours = round((now - p_end).total_seconds() / 3600.0, 1)
+
+        # Auto-move to "Atlikta / Done" Kanban stage if present
+        if self.project_id:
+            done_stage = self.env["project.task.type"].search([
+                ("project_ids", "in", self.project_id.id),
+                "|", "|",
+                ("name", "ilike", "atlik"),
+                ("name", "ilike", "done"),
+                ("fold", "=", True)
+            ], limit=1)
+            if done_stage:
+                vals["stage_id"] = done_stage.id
+
+        self.write(vals)
+        self._propagate_deadline_upward()
+
+        # 3. Post finish note to Chatter
+        finish_msg = f"🏁 <b>Užduotis baigta (Task Finished):</b> {user_name} pažymėjo užduotį kaip atliktą (100%).<br/>"
+        if date_late:
+            finish_msg += f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> Planuota pabaiga: {p_end.strftime('%Y-%m-%d %H:%M')}, Naujas terminas / faktinė pabaiga: {now.strftime('%Y-%m-%d %H:%M')} (viršyta ~{late_hours} val.). Laiko juostoje rodomas vėlavimo indikatorius."
+        else:
+            finish_msg += f"✨ <b>Užbaigta laiku:</b> Pabaigos data atnaujinta į {now.strftime('%Y-%m-%d %H:%M')}."
+
+        self.message_post(body=Markup(finish_msg), subtype_xmlid="mail.mt_note")
+        return True
+
+    def action_timer_reopen(self):
+        self.ensure_one()
+        self.write({
+            "state": "01_in_progress",
+            "progress": 0.0,
+            "is_timer_running": False,
+            "timer_start": False,
+        })
+        self._cascade_clear_downstream_progress()
+        self.message_post(
+            body=Markup(f"🔄 <b>Užduotis atnaujinta (Re-opened):</b> {self.env.user.name} atvėrė užduotį iš naujo."),
+            subtype_xmlid="mail.mt_note",
+        )
+        return True
 
     def _cascade_clear_downstream_progress(self):
         """
@@ -643,6 +793,8 @@ class ProjectTask(models.Model):
                 "delay_days": delay_days,
                 "has_dates": has_dates,
                 "is_hourly": bool(has_dates and t_start.date() == t_end.date() and (t_end - t_start).total_seconds() < 9 * 3600),
+                "is_timer_running": bool(t.is_timer_running),
+                "timer_start": t.timer_start.strftime(dt_format) if t.timer_start else False,
                 "progress": 0.0 if is_locked else round(prog, 2),
                 "progress_percent": 0 if is_locked else round(prog * 100, 1),
                 "allocated_hours": allocated_str,
