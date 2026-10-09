@@ -69,6 +69,7 @@
                                         <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(300)"><i class="fa fa-clock-o me-1"/>300% – Valandinis (2 val.)</a></li>
                                         <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(400)"><i class="fa fa-clock-o me-1"/>400% – Valandinis (1 val.)</a></li>
                                         <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(500)"><i class="fa fa-clock-o me-1"/>500% – Valandinis detalus (1 val. platus)</a></li>
+                                        <li><a class="dropdown-item small fw-bold text-success" href="#" t-on-click.prevent="() => this.setZoom(600)"><i class="fa fa-clock-o me-1"/>600% – Minutinis (15 min.)</a></li>
                                     </ul>
                                 </div>
                                 <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomIn" title="Didinti / Zoom In">

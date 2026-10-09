@@ -41,10 +41,11 @@ export const LITHUANIAN_MONTHS_SHORT = [
     "Gru",
 ];
 
-export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250, 300, 400, 500];
+export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600];
 export const TIMELINE_VIEW_STATE_KEY = "all_in_one_timeline_viewport_state";
 
 export const ZOOM_PX_PER_DAY = {
+    600: 24 * 4 * 32,
     500: 24 * 60,
     400: 24 * 40,
     300: 24 * 24,
@@ -606,7 +607,7 @@ export class AllInOneTimelineAction extends Component {
         g.config.autoscroll = true;
         g.config.autoscroll_speed = 30;
         g.config.drag_links = true;
-        g.config.drag_progress = true;
+        g.config.drag_progress = false;
         g.config.drag_resize = true;
         g.config.drag_move = true;
         g.config.order_branch = false;
@@ -1173,6 +1174,9 @@ export class AllInOneTimelineAction extends Component {
 
         // Cascading Drag-and-Drop: record start/end dates for parent and all descendants
         this.eventIds.push(g.attachEvent("onBeforeTaskDrag", (id, mode) => {
+            if (mode === "progress") {
+                return false;
+            }
             this.hideTooltip();
             const task = g.getTask(id);
             if (!task) return true;
@@ -1460,13 +1464,14 @@ export class AllInOneTimelineAction extends Component {
             let workStart, workEnd;
 
             if (isHourlyMode) {
-                // In hourly view (300% - 500%), preserve exact dragged/resized hours
+                // In hourly/minute view (>= 300%), preserve exact dragged/resized hours and minutes
                 const sDate = new Date(task.start_date);
                 const eDate = new Date(task.end_date);
                 sDate.setSeconds(0, 0);
                 eDate.setSeconds(0, 0);
+                const minDurationMs = (this.state.zoomLevel >= 600 ? 900000 : 3600000); // 15 min or 1 hour
                 if (eDate.getTime() <= sDate.getTime()) {
-                    eDate.setTime(sDate.getTime() + 3600000); // at least 1 hour
+                    eDate.setTime(sDate.getTime() + minDurationMs);
                 }
                 task.start_date = sDate;
                 task.end_date = eDate;
@@ -1963,6 +1968,75 @@ export class AllInOneTimelineAction extends Component {
             return;
         }
 
+        // Minute timescale (>= 600%): 5 rows (Year, Month, Day, Hour, Minute). Base unit is MINUTE.
+        if (zoom >= 600) {
+            g.config.time_step = 15;
+            const minuteStep = 15;
+            const minuteColWidth = 32;
+
+            const dayScaleMinute = {
+                unit: "day",
+                step: 1,
+                format: (date) => {
+                    const d = date.getDate();
+                    const wd = LITHUANIAN_WEEKDAYS_SHORT[date.getDay()];
+                    const hol = getLithuanianHoliday(date);
+                    if (hol) {
+                        return `<span class="holiday_day_cell" title="${hol}">★${d} (${wd})</span>`;
+                    }
+                    return `${d} (${wd})`;
+                },
+                css: (date) => {
+                    const today = new Date();
+                    if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
+                        return "today_scale_cell";
+                    }
+                    if (getLithuanianHoliday(date)) return "holiday_scale_cell";
+                    if (isWeekend(date)) return "weekend_scale_cell";
+                    return "";
+                },
+            };
+
+            const hourScaleMinute = {
+                unit: "hour",
+                step: 1,
+                format: (date) => {
+                    const h = date.getHours();
+                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                    return `${pad(h)}:00`;
+                },
+                css: (date) => {
+                    const h = date.getHours();
+                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                        return "work_hour_scale_cell";
+                    }
+                    return "off_hour_scale_cell";
+                },
+            };
+
+            const minuteScale = {
+                unit: "minute",
+                step: minuteStep,
+                format: (date) => {
+                    const m = date.getMinutes();
+                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                    return `:${pad(m)}`;
+                },
+                css: (date) => {
+                    const h = date.getHours();
+                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                        return "work_hour_scale_cell";
+                    }
+                    return "off_hour_scale_cell";
+                },
+            };
+
+            g.config.scales = [yearScale, monthScale, dayScaleMinute, hourScaleMinute, minuteScale];
+            g.config.scale_height = 110;
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : minuteColWidth;
+            return;
+        }
+
         // Hourly timescale (>= 300%): 5 rows (Year, Month, Week, Day, Hour). Base unit is HOUR.
         if (zoom >= 300) {
             g.config.time_step = (zoom === 300 ? 120 : 60);
@@ -2385,7 +2459,11 @@ export class AllInOneTimelineAction extends Component {
         let startDate;
         let endDate;
 
-        if (this.state.zoomLevel >= 300) {
+        if (this.state.zoomLevel >= 600) {
+            // Minute zoom (600%): 3 days past, 7 days future buffer for high performance
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 3, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 7, 23, 59, 59);
+        } else if (this.state.zoomLevel >= 300) {
             // Hourly zoom (300% - 500%): 7 days past, 14 days future buffer for high performance
             startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 7, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 14, 23, 59, 59);
