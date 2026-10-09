@@ -651,7 +651,8 @@ export class AllInOneTimelineAction extends Component {
                             : "fa fa-flag text-primary";
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
-                    const icon = (task.is_locked || task.state === "locked")
+                    const isLocked = task.is_locked || task.state === "locked";
+                    const icon = isLocked
                         ? "fa fa-lock text-warning"
                         : ((task.is_done || task.state === "1_done")
                             ? "fa fa-check-circle text-success"
@@ -661,10 +662,10 @@ export class AllInOneTimelineAction extends Component {
                                     ? "fa fa-exclamation-triangle text-warning"
                                     : (task.state === "1_canceled"
                                         ? "fa fa-times-circle text-danger"
-                                        : (task.state === "04_waiting_normal"
+                                        : ((task.state === "04_waiting_normal" && isLocked)
                                             ? "fa fa-clock-o text-secondary"
                                             : "fa fa-tasks text-muted")))));
-                    const titleAttr = (task.is_locked || task.state === "locked") ? ` title="${_t("Užrakinta užduotis (laukiama kitų užduočių)")}"` : "";
+                    const titleAttr = isLocked ? ` title="${_t("Užrakinta užduotis (laukiama kitų užduočių)")}"` : "";
                     return `<i class="${icon} me-1"${titleAttr}></i>${task.text}`;
                 },
             },
@@ -801,7 +802,7 @@ export class AllInOneTimelineAction extends Component {
                 if (state === "1_canceled") {
                     return `<span style="color: #dc2626; font-weight: 700;"><i class="fa fa-times-circle text-danger me-1"></i>Atšaukta (Canceled)</span>`;
                 }
-                if (state === "04_waiting_normal") {
+                if (state === "04_waiting_normal" && (t.is_locked || t.state === "locked")) {
                     return `<span style="color: #64748b; font-weight: 700;"><i class="fa fa-clock-o text-secondary me-1"></i>Laukiama (Waiting)</span>`;
                 }
                 return `<span style="color: #71639e; font-weight: 700;"><i class="fa fa-tasks me-1" style="color: #71639e;"></i>Vykdoma (In Progress)</span>`;
@@ -910,7 +911,7 @@ export class AllInOneTimelineAction extends Component {
                 statusIcon = `<i class="fa fa-exclamation-triangle me-1"></i>`;
             } else if (task.state === "1_canceled") {
                 statusIcon = `<i class="fa fa-times-circle me-1"></i>`;
-            } else if (task.state === "04_waiting_normal") {
+            } else if (task.state === "04_waiting_normal" && isLocked) {
                 statusIcon = `<i class="fa fa-clock-o me-1"></i>`;
             }
 
@@ -1006,7 +1007,7 @@ export class AllInOneTimelineAction extends Component {
                 tClass += " task_changes_requested task_state_changes_requested";
             } else if (state === "1_canceled") {
                 tClass += " task_canceled task_state_canceled";
-            } else if (state === "04_waiting_normal") {
+            } else if (state === "04_waiting_normal" && (task.is_locked || state === "locked")) {
                 tClass += " task_waiting task_state_waiting";
             } else {
                 tClass += " task_in_progress task_state_in_progress";

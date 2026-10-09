@@ -126,9 +126,10 @@ class ProjectTask(models.Model):
         """
         When a task or parent task is not finished (reopened, waiting, in progress, etc.),
         all dependent downstream tasks (dependent_ids) and child subtasks (child_ids)
-        must have their completion percentage cleared (progress = 0.0) and status
-        reset to waiting/locked (state = '04_waiting_normal').
-        Recursively cascades throughout the entire downstream dependency chain.
+        must have their completion percentage cleared (progress = 0.0).
+        Downstream dependent tasks that are blocked should have their state reset to waiting (state = '04_waiting_normal').
+        Unlocked child tasks with no uncompleted dependencies should remain or be set to in_progress (state = '01_in_progress').
+        Recursively cascades throughout the downstream dependency chain.
         """
         for task in self:
             for dep in task.dependent_ids:
@@ -137,7 +138,18 @@ class ProjectTask(models.Model):
                     dep._cascade_clear_downstream_progress()
             for child in task.child_ids:
                 if child.state == "1_done" or (child.progress and child.progress > 0):
-                    child.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                    child_is_blocked = False
+                    if child.depend_on_ids:
+                        for cdep in child.depend_on_ids:
+                            if cdep.state != "1_done" and (not cdep.progress or cdep.progress < 100.0):
+                                child_is_blocked = True
+                                break
+                    child_vals = {"progress": 0.0}
+                    if child_is_blocked:
+                        child_vals["state"] = "04_waiting_normal"
+                    else:
+                        child_vals["state"] = "01_in_progress"
+                    child.sudo().write(child_vals)
                     child._cascade_clear_downstream_progress()
 
     def _propagate_deadline_upward(self):
@@ -185,15 +197,6 @@ class ProjectTask(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
-            if "stage_id" in vals and "state" not in vals:
-                try:
-                    stage = self.env["project.task.type"].browse(vals["stage_id"])
-                    stage_name = (stage.name or "").lower()
-                    if "lauk" in stage_name or "wait" in stage_name:
-                        vals["state"] = "04_waiting_normal"
-                except Exception:
-                    pass
-
             # Auto-fill allocated_hours from actual working hours (darbo valandos)
             if "allocated_hours" not in vals:
                 s = vals.get("planned_date_start")
@@ -213,17 +216,6 @@ class ProjectTask(models.Model):
         return records
 
     def write(self, vals):
-        if "stage_id" in vals and "state" not in vals:
-            try:
-                stage = self.env["project.task.type"].browse(vals["stage_id"])
-                stage_name = (stage.name or "").lower()
-                if "lauk" in stage_name or "wait" in stage_name:
-                    vals["state"] = "04_waiting_normal"
-                elif "vykd" in stage_name or "progress" in stage_name:
-                    vals["state"] = "01_in_progress"
-            except Exception:
-                pass
-
         # Auto-update allocated_hours from working hours (darbo valandos) if dates are modified
         if ("planned_date_start" in vals or "planned_date_end" in vals or "date_deadline" in vals) and "allocated_hours" not in vals:
             for rec in self:
@@ -555,31 +547,37 @@ class ProjectTask(models.Model):
                 t_is_done = False
                 color = "#1e293b"  # Dark Charcoal Steel for locked tasks
                 t_state = "locked"
-                if (t.progress and t.progress > 0) or t.state == "1_done":
+                if (t.progress and t.progress > 0) or t.state != "04_waiting_normal":
                     try:
                         t.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
                     except Exception:
                         pass
-            elif t_state == "1_canceled":
-                color = "#dc3545"  # Cancelled: red
-            elif t_state == "1_done" or t_is_done:
-                color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
-                t_state = "1_done"
-                t_is_done = True
-                prog = 1.0
-            elif t_state == "03_approved":
-                color = "#10b981"  # Approved: just green
-            elif t_state == "02_changes_requested":
-                color = "#f59e0b"  # Changes Requested: orange
-            elif t_state == "04_waiting_normal" or "lauk" in stage_name or "wait" in stage_name:
-                # Non-locked Laukiam: standard grey like in Odoo task statuses
-                color = "#64748b"
-                t_state = "04_waiting_normal"
-            elif t_state == "01_in_progress":
-                color = "#71639e"  # In Progress: Purple
             else:
-                color = "#71639e"
-                t_state = "01_in_progress"
+                # Task is UNLOCKED (no uncompleted dependencies, parent not blocked)
+                # If an unlocked task was stuck in '04_waiting_normal', auto-heal it to '01_in_progress'!
+                if t_state == "04_waiting_normal":
+                    t_state = "01_in_progress"
+                    try:
+                        t.sudo().write({"state": "01_in_progress"})
+                    except Exception:
+                        pass
+
+                if t_state == "1_canceled":
+                    color = "#dc3545"  # Cancelled: red
+                elif t_state == "1_done" or t_is_done:
+                    color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
+                    t_state = "1_done"
+                    t_is_done = True
+                    prog = 1.0
+                elif t_state == "03_approved":
+                    color = "#10b981"  # Approved: just green
+                elif t_state == "02_changes_requested":
+                    color = "#f59e0b"  # Changes Requested: orange
+                elif t_state == "01_in_progress":
+                    color = "#71639e"  # In Progress: Purple
+                else:
+                    color = "#71639e"
+                    t_state = "01_in_progress"
 
             allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
 
@@ -1212,9 +1210,11 @@ class ProjectTask(models.Model):
                         if p_float >= 99.0:
                             vals["state"] = "1_done"
                         elif p_float < 100.0:
-                            if task.state == "1_done":
+                            if task.state in ("1_done", "04_waiting_normal"):
                                 vals["state"] = "01_in_progress"
                             task._cascade_clear_downstream_progress()
+                    elif not is_locked and task.state == "04_waiting_normal":
+                        vals["state"] = "01_in_progress"
 
                     if vals:
                         task.write(vals)
