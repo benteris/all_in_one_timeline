@@ -4,6 +4,7 @@
         <field name="name">project.task.form.inherit.timer</field>
         <field name="model">project.task</field>
         <field name="inherit_id" ref="project.view_task_form2"/>
+        <field name="priority">100</field>
         <field name="arch" type="xml">
             <!-- Header buttons on top of Task / Subtask form -->
             <xpath expr="//header" position="inside">
