@@ -206,7 +206,7 @@ class ProjectTask(models.Model):
 
         # 2. Date logic:
         # "if planned date is set and i finishe task within palned date whne i press finish button it should update palnedned dates if date ending date if date wasnt setp befor if date was set and lets say afters finish i went over planned date it should set new deadline, idea is to see how much i surpass time i can see how much i was late."
-        if not self.planned_date_start:
+        if not self.planned_date_start or self.planned_date_start > now:
             vals["planned_date_start"] = now
 
         p_end = self.planned_date_end
@@ -231,6 +231,12 @@ class ProjectTask(models.Model):
                 vals["date_deadline"] = now
                 date_late = True
                 late_hours = round((now - p_end).total_seconds() / 3600.0, 1)
+
+        # Ensure start date is never after end date
+        final_start = vals.get("planned_date_start", self.planned_date_start)
+        final_end = vals.get("planned_date_end", self.planned_date_end)
+        if final_start and final_end and final_start > final_end:
+            vals["planned_date_start"] = final_end
 
         # Auto-move to "Atlikta / Done" Kanban stage if present
         if self.project_id:

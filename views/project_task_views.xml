@@ -10,44 +10,62 @@
                 <field name="is_timer_running" invisible="1"/>
                 <button name="action_timer_start"
                         type="object"
-                        string="▶️ Pradėti"
-                        class="btn btn-success fw-bold me-1"
+                        string="Pradėti"
+                        class="btn-success me-1"
+                        icon="fa-play"
                         invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
-                        string="⏸️ Pristabdyti"
-                        class="btn btn-warning fw-bold me-1"
+                        string="Pristabdyti"
+                        class="btn-warning me-1"
+                        icon="fa-pause"
                         invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
-                        string="🏁 Baigti"
-                        class="btn btn-primary fw-bold me-2"
+                        string="Baigti"
+                        class="btn-success me-2"
+                        icon="fa-check"
                         invisible="state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_reopen"
                         type="object"
-                        string="🔄 Atnaujinti"
-                        class="btn btn-secondary me-2"
+                        string="Atnaujinti"
+                        class="btn-secondary me-2"
+                        icon="fa-undo"
                         invisible="state not in ['1_done', '1_canceled']"/>
             </xpath>
 
-            <!-- Action buttons inside Sub-tasks tab list view rows -->
+            <!-- Show Allocated hours (Planuojama trukmė) and Effective hours (Reali trukmė) by default like MRP -->
+            <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list/field[@name='allocated_hours']" position="attributes">
+                <attribute name="optional">show</attribute>
+            </xpath>
+            <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list/field[@name='effective_hours']" position="attributes">
+                <attribute name="optional">show</attribute>
+            </xpath>
+            <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list/field[@name='stage_id']" position="attributes">
+                <attribute name="optional">show</attribute>
+            </xpath>
+
+            <!-- MRP styled Action buttons in Sub-tasks tab list view rows -->
             <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list" position="inside">
                 <field name="is_timer_running" column_invisible="True"/>
                 <button name="action_timer_start"
                         type="object"
-                        title="Pradėti / Start"
-                        icon="fa-play text-success"
+                        title="Pradėti"
+                        class="btn-success px-2"
+                        icon="fa-play"
                         invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
-                        title="Pristabdyti / Pause"
-                        icon="fa-pause text-warning"
+                        title="Pristabdyti"
+                        class="btn-warning px-2"
+                        icon="fa-pause"
                         invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
-                        title="Baigti / Finish"
-                        icon="fa-check text-primary"
-                        invisible="state in ['1_done', '1_canceled']"/>
+                        title="Baigti"
+                        class="btn-success px-2"
+                        icon="fa-check"
+                        invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
             </xpath>
         </field>
     </record>
