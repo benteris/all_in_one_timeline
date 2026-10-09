@@ -56,6 +56,8 @@ Pagrindinės funkcijos:
             "all_in_one_timeline/static/lib/xlsx/xlsx.mini.min.js",
             "all_in_one_timeline/static/lib/html2canvas/html2canvas.min.js",
             "all_in_one_timeline/static/src/scss/all_in_one_timeline.scss",
+            "all_in_one_timeline/static/src/components/task_timer_widget/task_timer_widget.js",
+            "all_in_one_timeline/static/src/components/task_timer_widget/task_timer_widget.xml",
             "all_in_one_timeline/static/src/views/timeline_client_action.js",
             "all_in_one_timeline/static/src/views/timeline_client_action.xml",
         ],

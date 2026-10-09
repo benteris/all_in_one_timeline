@@ -9,6 +9,8 @@
             <!-- Header buttons on top of Task / Subtask form -->
             <xpath expr="//header" position="inside">
                 <field name="is_timer_running" invisible="1"/>
+                <field name="timer_start" invisible="1"/>
+                <field name="effective_hours" invisible="1"/>
                 <button name="action_timer_start"
                         type="object"
                         string="Pradėti"
@@ -33,6 +35,7 @@
                         class="btn-secondary me-2"
                         icon="fa-undo"
                         invisible="state not in ['1_done', '1_canceled']"/>
+                <widget name="task_timer_widget"/>
             </xpath>
 
             <!-- Show Allocated hours (Planuojama trukmė) and Effective hours (Reali trukmė) by default like MRP -->
@@ -49,6 +52,8 @@
             <!-- MRP styled Action buttons in Sub-tasks tab list view rows -->
             <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list" position="inside">
                 <field name="is_timer_running" column_invisible="True"/>
+                <field name="timer_start" column_invisible="True"/>
+                <field name="effective_hours" column_invisible="True"/>
                 <button name="action_timer_start"
                         type="object"
                         title="Pradėti"
@@ -67,6 +72,7 @@
                         class="btn-success px-2"
                         icon="fa-check"
                         invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
+                <widget name="task_timer_widget" string="Laikmatis"/>
             </xpath>
         </field>
     </record>
