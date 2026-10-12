@@ -1,40 +1,18 @@
 /** @odoo-module **/
 
-import { Component, useState, onWillStart, onWillRender, onWillUpdateProps, onWillDestroy } from "@odoo/owl";
+import { Component, useState, onWillStart, onWillUpdateProps, onWillDestroy } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { standardWidgetProps } from "@web/views/widgets/standard_widget_props";
 import { useRecordObserver } from "@web/model/relational_model/utils";
 
-function getElapsedSeconds(record) {
+function getRecordBaseSeconds(record) {
     if (!record || !record.data) return 0;
-    const isRunning = Boolean(record.data.is_timer_running);
-    const effectiveHours = Number(record.data.effective_hours) || 0;
-    const baseSeconds = Math.round(effectiveHours * 3600);
-
-    if (isRunning && record.data.timer_start) {
-        let startTimeMs = 0;
-        const ts = record.data.timer_start;
-        if (typeof ts === "string") {
-            const utcStr = ts.includes("Z") || ts.includes("+") ? ts : ts.replace(" ", "T") + "Z";
-            startTimeMs = new Date(utcStr).getTime();
-        } else if (ts && typeof ts.toMillis === "function") {
-            startTimeMs = ts.toMillis();
-        } else if (ts && typeof ts.toJSDate === "function") {
-            startTimeMs = ts.toJSDate().getTime();
-        } else if (ts && typeof ts.ts === "number") {
-            startTimeMs = ts.ts;
-        } else if (ts && ts instanceof Date) {
-            startTimeMs = ts.getTime();
-        } else if (typeof ts === "number") {
-            startTimeMs = ts;
-        }
-
-        if (startTimeMs > 0 && !isNaN(startTimeMs)) {
-            const currentSessionSeconds = Math.max(0, Math.floor((Date.now() - startTimeMs) / 1000));
-            return baseSeconds + currentSessionSeconds;
-        }
+    if (typeof record.data.timer_display_seconds === "number" && record.data.timer_display_seconds >= 0) {
+        return record.data.timer_display_seconds;
     }
-    return baseSeconds;
+    const totalSec = Number(record.data.timer_total_seconds) || 0;
+    const effSec = Math.round((Number(record.data.effective_hours) || 0) * 3600);
+    return Math.max(totalSec, effSec);
 }
 
 function formatTime(totalSeconds) {
@@ -55,23 +33,55 @@ export class TaskTimerWidget extends Component {
 
     setup() {
         this.observedRecord = null;
-        this.state = useState({
-            elapsedSeconds: this.calcElapsed(),
-        });
         this.interval = null;
+        this.baseSeconds = 0;
+        this.clientStartMs = 0;
+        this.activeTaskId = null;
+        this.lastTimerStart = null;
+        this.wasRunning = false;
+
+        this.state = useState({
+            elapsedSeconds: 0,
+        });
 
         const syncState = (rec = null) => {
             if (rec) this.observedRecord = rec;
-            this.state.elapsedSeconds = this.calcElapsed();
-            if (this.isRunning) {
-                this.startTicking();
+            const record = this.activeRecord;
+            if (!record || !record.data) {
+                this.state.elapsedSeconds = 0;
+                this.stopTicking();
+                return;
+            }
+
+            const isRunning = Boolean(record.data.is_timer_running);
+            const taskId = record.resId || record.data.id;
+            const timerStart = record.data.timer_start;
+            const serverSeconds = getRecordBaseSeconds(record);
+
+            const taskChanged = this.activeTaskId !== taskId;
+            const runStateChanged = this.wasRunning !== isRunning;
+            const startTimestampChanged = (String(this.lastTimerStart) !== String(timerStart));
+
+            this.activeTaskId = taskId;
+            this.lastTimerStart = timerStart;
+            this.wasRunning = isRunning;
+
+            if (isRunning) {
+                // If newly running, or record/task/session changed, sync baseline and start client ticking
+                if (runStateChanged || taskChanged || startTimestampChanged || !this.interval) {
+                    this.baseSeconds = serverSeconds;
+                    this.clientStartMs = Date.now();
+                    this.state.elapsedSeconds = this.baseSeconds;
+                    this.startTicking();
+                }
             } else {
                 this.stopTicking();
+                this.baseSeconds = serverSeconds;
+                this.state.elapsedSeconds = serverSeconds;
             }
         };
 
         onWillStart(() => syncState());
-        onWillRender(() => syncState());
 
         try {
             useRecordObserver((record) => {
@@ -107,16 +117,15 @@ export class TaskTimerWidget extends Component {
         return this.isRunning || this.state.elapsedSeconds > 0;
     }
 
-    calcElapsed(rec = null) {
-        const record = rec || this.activeRecord;
-        return getElapsedSeconds(record);
-    }
-
     startTicking() {
-        if (this.interval) return;
+        if (this.interval) {
+            clearInterval(this.interval);
+            this.interval = null;
+        }
         this.interval = setInterval(() => {
             if (this.isRunning) {
-                this.state.elapsedSeconds = this.calcElapsed();
+                const clientDelta = Math.max(0, Math.floor((Date.now() - this.clientStartMs) / 1000));
+                this.state.elapsedSeconds = this.baseSeconds + clientDelta;
             } else {
                 this.stopTicking();
             }
@@ -140,7 +149,10 @@ export const taskTimerWidget = {
     fieldDependencies: [
         { name: "is_timer_running", type: "boolean" },
         { name: "timer_start", type: "datetime" },
+        { name: "timer_total_seconds", type: "integer" },
+        { name: "timer_display_seconds", type: "integer" },
         { name: "effective_hours", type: "float" },
+        { name: "state", type: "selection" },
     ],
 };
 

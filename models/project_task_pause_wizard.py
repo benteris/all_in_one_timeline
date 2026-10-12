@@ -29,19 +29,27 @@ class ProjectTaskPauseWizard(models.TransientModel):
         required=True,
     )
 
-    @api.depends("timer_start")
+    @api.depends("timer_start", "task_id")
     def _compute_duration(self):
         now = fields.Datetime.now()
         for rec in self:
             t_start = rec.timer_start or (rec.task_id and rec.task_id.timer_start)
             if t_start:
-                diff_sec = (now - t_start).total_seconds()
-                mins = int(max(0, diff_sec) // 60)
+                diff_sec = max(0, int((now - t_start).total_seconds()))
+                mins = diff_sec // 60
                 hrs = mins // 60
                 rem_mins = mins % 60
-                rec.duration_display = f"{hrs} val. {rem_mins} min. ({round(max(0.01, diff_sec / 3600.0), 2)} val.)"
+                rem_sec = diff_sec % 60
+                if hrs > 0:
+                    dur_str = f"{hrs} val. {rem_mins} min."
+                elif mins > 0:
+                    dur_str = f"{mins} min. {rem_sec} sek."
+                else:
+                    dur_str = f"{diff_sec} sek."
+                h_float = round(max(0.01, diff_sec / 3600.0), 2)
+                rec.duration_display = f"{dur_str} ({h_float} val.)"
             else:
-                rec.duration_display = "0 min."
+                rec.duration_display = "0 sek."
 
     def action_confirm_pause(self):
         self.ensure_one()
@@ -51,9 +59,15 @@ class ProjectTaskPauseWizard(models.TransientModel):
 
         now = fields.Datetime.now()
         t_start = task.timer_start or self.timer_start or now
-        diff_sec = max(0, (now - t_start).total_seconds())
-        elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2))
-        mins = int(diff_sec // 60)
+        diff_sec = max(0, int((now - t_start).total_seconds()))
+        eff_sec = int(round((task.effective_hours or 0.0) * 3600))
+        cur_total_sec = max(task.timer_total_seconds or 0, eff_sec)
+        new_total_sec = cur_total_sec + diff_sec
+
+        elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2)) if diff_sec > 0 else 0.0
+        mins = diff_sec // 60
+        rem_sec = diff_sec % 60
+        dur_str = f"{mins} min. {rem_sec} sek." if mins > 0 else f"{diff_sec} sek."
 
         # 1. Register in Timesheets (account.analytic.line)
         emp = self.env.user.employee_id
@@ -63,7 +77,7 @@ class ProjectTaskPauseWizard(models.TransientModel):
             emp = self.env["hr.employee"].search([], limit=1)
 
         company = task.company_id or (emp and emp.company_id) or self.env.company
-        if task.project_id and "account.analytic.line" in self.env:
+        if task.project_id and "account.analytic.line" in self.env and elapsed_hours > 0:
             try:
                 self.env["account.analytic.line"].create({
                     "name": self.reason or "Pristabdyta (Paused)",
@@ -88,15 +102,16 @@ class ProjectTaskPauseWizard(models.TransientModel):
 
         chatter_body = (
             f"⏸️ <b>Darbai pristabdyti (Task Paused):</b> {user_name} pristabdė darbą [{pause_time_str}].<br/>"
-            f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_hours} val. ({mins} min.)<br/>"
+            f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_hours} val. ({dur_str})<br/>"
             f"• <b>Priežastis:</b> {self.reason}"
         )
         task.message_post(body=Markup(chatter_body), subtype_xmlid="mail.mt_note")
 
-        # 3. Update task timer state
+        # 3. Update task timer state and accumulated seconds
         task.write({
             "is_timer_running": False,
             "timer_start": False,
+            "timer_total_seconds": new_total_sec,
         })
 
         return {"type": "ir.actions.act_window_close"}

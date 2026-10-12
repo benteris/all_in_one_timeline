@@ -955,6 +955,22 @@ div.gantt_tooltip {
         }
     }
 
+    &.done {
+        background-color: #f0fdf4;
+        border: 1.5px solid #22c55e;
+        color: #15803d;
+
+        .timer_digits {
+            color: #15803d;
+            letter-spacing: 0.8px;
+            font-size: 13px;
+        }
+
+        .timer_icon {
+            font-size: 11px;
+        }
+    }
+
     .timer_status_tag {
         font-size: 10px;
         font-weight: 600;

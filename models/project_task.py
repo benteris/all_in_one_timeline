@@ -140,16 +140,35 @@ class ProjectTask(models.Model):
 
     timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
     is_timer_running = fields.Boolean("Laikmatis veikia / Timer Running", default=False, readonly=True, copy=False)
+    timer_total_seconds = fields.Integer("Laikmačio sekundės / Timer Total Seconds", default=0, readonly=True, copy=False)
+    timer_display_seconds = fields.Integer("Rodyti sekundes / Display Seconds", compute="_compute_timer_display_seconds")
+
+    @api.depends("timer_start", "is_timer_running", "timer_total_seconds", "effective_hours")
+    def _compute_timer_display_seconds(self):
+        now = fields.Datetime.now()
+        for task in self:
+            eff_sec = int(round((task.effective_hours or 0.0) * 3600))
+            base_sec = max(task.timer_total_seconds or 0, eff_sec)
+            if task.is_timer_running and task.timer_start:
+                diff_sec = max(0, int((now - task.timer_start).total_seconds()))
+                task.timer_display_seconds = base_sec + diff_sec
+            else:
+                task.timer_display_seconds = base_sec
 
     def action_timer_start(self):
         self.ensure_one()
         if self.is_timer_running:
             return False
         now = fields.Datetime.now()
+        eff_sec = int(round((self.effective_hours or 0.0) * 3600))
         vals = {
             "timer_start": now,
             "is_timer_running": True,
         }
+        # Keep timer_total_seconds synced with timesheets if uninitialized
+        if (not self.timer_total_seconds or self.timer_total_seconds < eff_sec) and eff_sec > 0:
+            vals["timer_total_seconds"] = eff_sec
+
         # If task has no planned start date or it was planned in the future, set planned start to now
         if not self.planned_date_start or self.planned_date_start > now:
             vals["planned_date_start"] = now
@@ -185,10 +204,14 @@ class ProjectTask(models.Model):
         now = fields.Datetime.now()
         user_name = self.env.user.name
 
-        # 1. If timer was running, register the elapsed time to Timesheets
+        eff_sec = int(round((self.effective_hours or 0.0) * 3600))
+        cur_total_sec = max(self.timer_total_seconds or 0, eff_sec)
+
+        # 1. If timer was running, register the elapsed time to Timesheets and accumulate seconds
         if self.is_timer_running and self.timer_start:
-            diff_sec = max(0, (now - self.timer_start).total_seconds())
-            elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2))
+            diff_sec = max(0, int((now - self.timer_start).total_seconds()))
+            cur_total_sec += diff_sec
+            elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2)) if diff_sec > 0 else 0.0
             emp = self.env.user.employee_id
             if not emp and "hr.employee" in self.env:
                 emp = self.env["hr.employee"].search([("user_id", "=", self.env.uid)], limit=1)
@@ -196,7 +219,7 @@ class ProjectTask(models.Model):
                 emp = self.env["hr.employee"].search([], limit=1)
 
             company = self.company_id or (emp and emp.company_id) or self.env.company
-            if self.project_id and "account.analytic.line" in self.env:
+            if self.project_id and "account.analytic.line" in self.env and elapsed_hours > 0:
                 try:
                     self.env["account.analytic.line"].create({
                         "name": _("Darbas baigtas (Finish)"),
@@ -211,15 +234,18 @@ class ProjectTask(models.Model):
                 except Exception as e:
                     _logger.warning("Could not create timesheet on finish: %s", e)
 
-            mins = int(diff_sec // 60)
+            mins = diff_sec // 60
+            rem_sec = diff_sec % 60
+            dur_str = f"{mins} min. {rem_sec} sek." if mins > 0 else f"{diff_sec} sek."
             self.message_post(
-                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_hours} val. ({mins} min.)."),
+                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_hours} val. ({dur_str})."),
                 subtype_xmlid="mail.mt_note",
             )
 
         vals = {
             "is_timer_running": False,
             "timer_start": False,
+            "timer_total_seconds": cur_total_sec,
             "state": "1_done",
         }
 
@@ -287,11 +313,14 @@ class ProjectTask(models.Model):
 
     def action_timer_reopen(self):
         self.ensure_one()
+        eff_sec = int(round((self.effective_hours or 0.0) * 3600))
+        cur_total_sec = max(self.timer_total_seconds or 0, eff_sec)
         self.write({
             "state": "01_in_progress",
             "progress": 0.0,
             "is_timer_running": False,
             "timer_start": False,
+            "timer_total_seconds": cur_total_sec,
         })
         self._cascade_clear_downstream_progress()
         self.message_post(

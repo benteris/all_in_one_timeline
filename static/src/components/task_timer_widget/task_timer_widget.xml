@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <templates xml:space="preserve">
     <t t-name="all_in_one_timeline.TaskTimerWidget">
-        <div t-if="hasTime" class="o_task_timer_badge d-inline-flex align-items-center ms-2" t-att-class="isRunning ? 'running' : 'paused'" title="Užduoties vykdymo laikas / Task Execution Timer">
+        <div t-if="hasTime" class="o_task_timer_badge d-inline-flex align-items-center ms-2" t-att-class="isRunning ? 'running' : (isDone ? 'done' : 'paused')" title="Užduoties vykdymo laikas / Task Execution Timer">
             <t t-if="isRunning">
                 <span class="timer_pulse_dot me-1">
                     <i class="fa fa-circle text-danger"/>
                 </span>
                 <span class="timer_icon me-1 text-success">
                     <i class="fa fa-clock-o"/>
+                </span>
+            </t>
+            <t t-elif="isDone">
+                <span class="timer_icon me-1 text-success">
+                    <i class="fa fa-check-circle"/>
                 </span>
             </t>
             <t t-else="">
