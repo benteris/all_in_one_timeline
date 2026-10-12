@@ -139,6 +139,7 @@ class ProjectTask(models.Model):
     _inherit = "project.task"
 
     timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
+    first_timer_start = fields.Datetime("Pirmo starto laikas / First Timer Start", readonly=True, copy=False)
     is_timer_running = fields.Boolean("Laikmatis veikia / Timer Running", default=False, readonly=True, copy=False)
     timer_total_seconds = fields.Integer("Laikmačio sekundės / Timer Total Seconds", default=0, readonly=True, copy=False)
     timer_display_seconds = fields.Integer("Rodyti sekundes / Display Seconds", compute="_compute_timer_display_seconds")
@@ -165,12 +166,20 @@ class ProjectTask(models.Model):
             "timer_start": now,
             "is_timer_running": True,
         }
+        # Record first start time of work if not already recorded
+        if not self.first_timer_start:
+            vals["first_timer_start"] = now
+
         # Keep timer_total_seconds synced with timesheets if uninitialized
         if (not self.timer_total_seconds or self.timer_total_seconds < eff_sec) and eff_sec > 0:
             vals["timer_total_seconds"] = eff_sec
 
-        # If task has no planned start date or it was planned in the future, set planned start to now
-        if not self.planned_date_start or self.planned_date_start > now:
+        # If task has NO pre-planned schedule (no planned_date_end set):
+        # Update planned_date_start to when timer actually started (first_timer_start or now),
+        # so it doesn't hold an old task creation date from days/weeks ago!
+        if not self.planned_date_end:
+            vals["planned_date_start"] = self.first_timer_start or now
+        elif not self.planned_date_start or self.planned_date_start > now:
             vals["planned_date_start"] = now
 
         if self.state in ("04_waiting_normal", "draft"):
@@ -247,27 +256,36 @@ class ProjectTask(models.Model):
             "timer_start": False,
             "timer_total_seconds": cur_total_sec,
             "state": "1_done",
+            "progress": 1.0,  # Mark as 100% complete
         }
 
-        # 2. Date logic:
-        # Preserve actual start time (planned_date_start or timer_start or now)
-        act_start = self.planned_date_start or self.timer_start or now
-        if not self.planned_date_start or self.planned_date_start > now:
-            vals["planned_date_start"] = act_start
-
+        # 2. Date and Allocation logic:
+        # Check if the task had a pre-planned schedule (i.e. planned_date_end was set before finishing)
+        had_preplanned_schedule = bool(self.planned_date_end)
         p_end = self.planned_date_end
         date_late = False
         late_hours = 0.0
 
-        if not p_end:
-            # Ending date wasn't set before: set ending date = now
+        if not had_preplanned_schedule:
+            # Case A: Task had NO pre-planned schedule
+            # Start date = actual work start (first_timer_start or start time of work)
+            # End date = when user clicked Baigti (now)
+            # Allocated hours = actual time spent (so Allocated Time matches reality at 100%)
+            start_cand = self.first_timer_start or self.planned_date_start
+            # If start_cand is unset, or is from a previous day while total spent is under 24h:
+            if not start_cand or (start_cand.date() < now.date() and cur_total_sec < 86400):
+                start_cand = now - timedelta(seconds=max(60, cur_total_sec))
+
+            vals["planned_date_start"] = start_cand
             vals["planned_date_end"] = now
-            if not self.date_deadline:
-                vals["date_deadline"] = now
+            vals["date_deadline"] = now
+            # Set allocated hours to the exact time spent so progress is 100% and matches reality
+            spent_hours = max(0.01, round(cur_total_sec / 3600.0, 2))
+            vals["allocated_hours"] = spent_hours
         else:
-            # Planned date WAS set before:
+            # Case B: Task HAD a pre-planned schedule (e.g. planned in advance by manager or on timeline)
             if now <= p_end:
-                # Finished within planned date: update ending date to now
+                # Finished within planned date: update actual ending date to now
                 vals["planned_date_end"] = now
                 if not self.date_deadline or self.date_deadline < now:
                     vals["date_deadline"] = now
@@ -302,7 +320,12 @@ class ProjectTask(models.Model):
         # 3. Post finish note to Chatter
         now_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm")
         finish_msg = f"🏁 <b>Užduotis baigta (Task Finished):</b> {user_name} pažymėjo užduotį kaip atliktą (100%).<br/>"
-        if date_late:
+        if not had_preplanned_schedule:
+            s_str = format_user_datetime(self.env, vals['planned_date_start'], "yyyy-MM-dd HH:mm")
+            spent_h = vals['allocated_hours']
+            mins_tot = cur_total_sec // 60
+            finish_msg += f"⏱️ <b>Faktinė trukmė užfiksuota:</b> Nuo {s_str} iki {now_str} (~{mins_tot} min., {spent_h} val.)."
+        elif date_late:
             p_end_str = format_user_datetime(self.env, p_end, "yyyy-MM-dd HH:mm")
             finish_msg += f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> Planuota pabaiga: {p_end_str}, Naujas terminas / faktinė pabaiga: {now_str} (viršyta ~{late_hours} val.). Laiko juostoje rodomas vėlavimo indikatorius."
         else:
