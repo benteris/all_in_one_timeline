@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
-    <t t-name="all_in_one_timeline.AllInOneTimelineView">
-        <div class="o_timeline_view h-100 d-flex flex-column o_all_in_one_timeline_action" t-ref="root">
+    <t t-name="gannt_lt.GanntLTView">
+        <div class="o_timeline_view h-100 d-flex flex-column o_all_in_one_timeline_action o_gannt_lt_action" t-ref="root">
             <Layout display="display" className="'h-100 d-flex flex-column'">
                 <t t-set-slot="control-panel-additional-actions">
                     <CogMenu t-if="env.searchModel"/>
@@ -99,5 +99,8 @@
                 </div>
             </Layout>
         </div>
+    </t>
+    <t t-name="all_in_one_timeline.AllInOneTimelineView">
+        <t t-call="gannt_lt.GanntLTView"/>
     </t>
 </templates>

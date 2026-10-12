@@ -25,7 +25,7 @@ function formatTime(totalSeconds) {
 }
 
 export class TaskTimerWidget extends Component {
-    static template = "all_in_one_timeline.TaskTimerWidget";
+    static template = "gannt_lt.TaskTimerWidget";
     static props = {
         ...standardWidgetProps,
         "*": true,

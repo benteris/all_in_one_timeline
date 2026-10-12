@@ -47,16 +47,21 @@ class ProjectProject(models.Model):
                 break
         return super().write(vals)
 
-    def action_open_all_in_one_timeline(self):
-        """Opens All In One Timeline filtered for this project."""
+    def action_open_gannt_lt(self):
+        """Opens GanntLT filtered for this project."""
         self.ensure_one()
         return {
             "type": "ir.actions.client",
-            "name": f"{self.name} - Timeline",
-            "tag": "all_in_one_timeline.action",
+            "name": f"{self.name} - GanntLT",
+            "tag": "gannt_lt.action",
             "context": {
                 "default_project_id": self.id,
                 "active_id": self.id,
             },
         }
+
+    def action_open_all_in_one_timeline(self):
+        """Alias for backward compatibility."""
+        return self.action_open_gannt_lt()
+
 

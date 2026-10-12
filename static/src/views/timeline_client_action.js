@@ -42,7 +42,7 @@ export const LITHUANIAN_MONTHS_SHORT = [
 ];
 
 export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600];
-export const TIMELINE_VIEW_STATE_KEY = "all_in_one_timeline_viewport_state";
+export const TIMELINE_VIEW_STATE_KEY = "gannt_lt_viewport_state";
 
 export const ZOOM_PX_PER_DAY = {
     600: 24 * 4 * 32,
@@ -347,8 +347,8 @@ export function computeWorkDates(startDate, endDate) {
     return { workStart, workEnd };
 }
 
-export class AllInOneTimelineAction extends Component {
-    static template = "all_in_one_timeline.AllInOneTimelineView";
+export class GanntLTAction extends Component {
+    static template = "gannt_lt.GanntLTView";
     static components = { Layout, SearchBar, CogMenu };
     static props = {
         ...standardViewProps,
@@ -3043,7 +3043,7 @@ export class AllInOneTimelineAction extends Component {
                 scale: 2,
             });
             const link = document.createElement("a");
-            link.download = `timeline_${new Date().toISOString().slice(0, 10)}.png`;
+            link.download = `GanntLT_${new Date().toISOString().slice(0, 10)}.png`;
             link.href = canvas.toDataURL("image/png");
             link.click();
             this.notification.add(_t("PNG paveikslėlis atsisiųstas"), { type: "success" });
@@ -3082,22 +3082,26 @@ export class AllInOneTimelineAction extends Component {
 
         const ws = window.XLSX.utils.json_to_sheet(tasks);
         const wb = window.XLSX.utils.book_new();
-        window.XLSX.utils.book_append_sheet(wb, ws, "Timeline");
-        window.XLSX.writeFile(wb, `Timeline_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        window.XLSX.utils.book_append_sheet(wb, ws, "GanntLT");
+        window.XLSX.writeFile(wb, `GanntLT_${new Date().toISOString().slice(0, 10)}.xlsx`);
         this.notification.add(_t("Excel failas atsisiųstas"), { type: "success" });
     }
 }
 
-// Register Client Action
-registry.category("actions").add("all_in_one_timeline.action", AllInOneTimelineAction);
+// Backward-compatibility alias
+export const AllInOneTimelineAction = GanntLTAction;
 
-// Register Timeline View to override timeline view with All In One Advanced Gantt
-export const AllInOneTimelineView = {
+// Register Client Action (both modern GanntLT tag and legacy alias)
+registry.category("actions").add("gannt_lt.action", GanntLTAction);
+registry.category("actions").add("all_in_one_timeline.action", GanntLTAction);
+
+// Register Timeline View with GanntLT
+export const GanntLTTimelineView = {
     type: "timeline",
-    display_name: _t("Timeline"),
+    display_name: _t("GanntLT"),
     icon: "fa fa-tasks",
     multiRecord: true,
-    Controller: AllInOneTimelineAction,
+    Controller: GanntLTAction,
     props: (genericProps) => {
         return {
             ...genericProps,
@@ -3105,21 +3109,21 @@ export const AllInOneTimelineView = {
     },
 };
 
+export const AllInOneTimelineView = GanntLTTimelineView;
+
 const viewsRegistry = registry.category("views");
 const origViewsAdd = viewsRegistry.add.bind(viewsRegistry);
 
 viewsRegistry.add = function (key, value, options = {}) {
     if (key === "timeline") {
-        if (value === AllInOneTimelineView) {
+        if (value === GanntLTTimelineView || value === AllInOneTimelineView) {
             return origViewsAdd(key, value, { ...options, force: true });
         }
-        // If web_timeline or any other module attempts to register "timeline",
-        // intercept it silently without throwing DuplicatedKeyError,
-        // and keep AllInOneTimelineView as the active timeline view!
+        // Intercept any third-party timeline registration and ensure GanntLT remains active
         return this;
     }
     return origViewsAdd(key, value, options);
 };
 
-// Register All In One Timeline as the timeline view
-viewsRegistry.add("timeline", AllInOneTimelineView, { force: true });
+// Register GanntLT as the timeline view
+viewsRegistry.add("timeline", GanntLTTimelineView, { force: true });

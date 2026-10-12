@@ -1,24 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <!-- Stat button on Project Form: Purely opens All In One Timeline within the project -->
-    <record id="edit_project_inherit_all_in_one_timeline" model="ir.ui.view">
-        <field name="name">project.project.form.inherit.all_in_one_timeline</field>
+    <!-- Standalone Timeline View for Projects -->
+    <record id="project_project_timeline" model="ir.ui.view">
+        <field name="name">project.project.timeline</field>
+        <field name="model">project.project</field>
+        <field name="type">timeline</field>
+        <field name="arch" type="xml">
+            <timeline
+                date_start="date_start"
+                date_stop="date"
+                default_group_by="partner_id"
+                event_open_popup="true"
+            />
+        </field>
+    </record>
+
+    <!-- Enable Timeline View mode on Project Actions -->
+    <record id="project.open_view_project_all" model="ir.actions.act_window">
+        <field name="view_mode">kanban,list,form,timeline</field>
+    </record>
+    <record id="project.open_view_project_all_group_stage" model="ir.actions.act_window">
+        <field name="view_mode">kanban,list,form,calendar,activity,timeline</field>
+    </record>
+
+    <!-- Stat button on Project Form: Opens GanntLT Timeline for this project -->
+    <record id="edit_project_inherit_gannt_lt" model="ir.ui.view">
+        <field name="name">project.project.form.inherit.gannt_lt</field>
         <field name="model">project.project</field>
         <field name="inherit_id" ref="project.edit_project"/>
         <field name="arch" type="xml">
             <xpath expr="//div[@name='button_box']" position="inside">
                 <button class="oe_stat_button"
                         type="object"
-                        name="action_open_all_in_one_timeline"
+                        name="action_open_gannt_lt"
                         icon="fa-tasks">
                     <div class="o_field_widget o_stat_info">
-                        <span class="o_stat_text">All In One</span>
-                        <span class="o_stat_text">Timeline</span>
+                        <span class="o_stat_text">GanntLT</span>
+                        <span class="o_stat_text">Tvarkaraštis</span>
                     </div>
                 </button>
             </xpath>
             <xpath expr="//field[@name='date_start']" position="after">
-                <field name="date_deadline" string="Deadline"/>
+                <field name="date_deadline" string="Terminas (Deadline)"/>
             </xpath>
         </field>
     </record>

@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+from . import ir_ui_view
+from . import ir_actions
+from . import ir_action
 from . import project_task
 from . import project_project
 from . import project_milestone

@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, time, date
 from odoo import api, fields, models, _
+from odoo.exceptions import ValidationError
+from odoo.tools.sql import column_exists, create_column
 from odoo.tools.misc import format_datetime
 from markupsafe import Markup
 import logging
@@ -137,6 +139,68 @@ def calculate_lithuanian_working_hours(start_dt, end_dt):
 
 class ProjectTask(models.Model):
     _inherit = "project.task"
+
+    planned_date_start = fields.Datetime(
+        string="Planuota pradžia / Planned Start Date",
+        compute="_compute_planned_date_start",
+        store=True,
+        readonly=False,
+        precompute=True,
+        copy=False,
+    )
+    planned_date_end = fields.Datetime(
+        string="Planuota pabaiga / Planned End Date",
+        compute="_compute_planned_date_end",
+        store=True,
+        readonly=False,
+        precompute=True,
+        copy=False,
+    )
+
+    @api.depends("date_assign")
+    def _compute_planned_date_start(self):
+        """Default planned_date_start to date_assign if not already set."""
+        for record in self.filtered(lambda x: not x.planned_date_start and x.date_assign):
+            if not record.planned_date_end or record.planned_date_end >= record.date_assign:
+                record.planned_date_start = record.date_assign
+
+    @api.depends("date_end", "date_deadline")
+    def _compute_planned_date_end(self):
+        """Default planned_date_end to date_end or date_deadline if not already set."""
+        for record in self.filtered(lambda x: not x.planned_date_end):
+            target = record.date_end or record.date_deadline
+            if target:
+                target_dt = target if isinstance(target, datetime) else datetime.combine(target, time(17, 0, 0))
+                if not record.planned_date_start or record.planned_date_start <= target_dt:
+                    record.planned_date_end = target_dt
+
+    @api.constrains("planned_date_start", "planned_date_end")
+    def _check_planned_dates(self):
+        for task in self:
+            if task.planned_date_start and task.planned_date_end:
+                if task.planned_date_end < task.planned_date_start:
+                    raise ValidationError(
+                        self.env._("Pabaigos data negali būti ankstesnė už pradžios datą. (The end date must be after the start date.)")
+                    )
+
+    def _auto_init(self):
+        cr = self.env.cr
+        if not column_exists(cr, "project_task", "planned_date_start"):
+            create_column(cr, "project_task", "planned_date_start", "timestamp")
+            cr.execute("""
+                UPDATE project_task
+                SET planned_date_start = COALESCE(date_assign, create_date)
+                WHERE planned_date_start IS NULL
+            """)
+        if not column_exists(cr, "project_task", "planned_date_end"):
+            create_column(cr, "project_task", "planned_date_end", "timestamp")
+            cr.execute("""
+                UPDATE project_task
+                SET planned_date_end = COALESCE(date_end, date_deadline)
+                WHERE planned_date_end IS NULL
+                AND COALESCE(planned_date_start, date_end, date_deadline) <= COALESCE(date_end, date_deadline)
+            """)
+        return super()._auto_init()
 
     timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
     first_timer_start = fields.Datetime("Pirmo starto laikas / First Timer Start", readonly=True, copy=False)
@@ -1513,3 +1577,29 @@ class ProjectTask(models.Model):
             target_task.write({"depend_on_ids": [(3, int(source_id))]})
             return True
         return False
+
+    # GanntLT Aliases for seamless RPC calls
+    @api.model
+    def get_gannt_lt_data(self, project_id=None, domain=None, date_start=None, date_end=None, user_id=None, model_name=None):
+        return self.get_all_in_one_timeline_data(project_id, domain, date_start, date_end, user_id, model_name)
+
+    @api.model
+    def save_gannt_lt_task_dates(self, task_id, start_date=None, end_date=None, progress=None, state=None, cascade_shifts=None):
+        return self.save_timeline_task_dates(task_id, start_date, end_date, progress, state, cascade_shifts)
+
+    @api.model
+    def delete_gannt_lt_task(self, task_id):
+        return self.delete_timeline_task(task_id)
+
+    @api.model
+    def delete_gannt_lt_milestone(self, milestone_id):
+        return self.delete_timeline_milestone(milestone_id)
+
+    @api.model
+    def add_gannt_lt_dependency(self, source_id, target_id):
+        return self.add_timeline_dependency(source_id, target_id)
+
+    @api.model
+    def remove_gannt_lt_dependency(self, source_id, target_id):
+        return self.remove_timeline_dependency(source_id, target_id)
+
