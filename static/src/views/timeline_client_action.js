@@ -1030,7 +1030,7 @@ export class AllInOneTimelineAction extends Component {
 
             if (this.state.zoomLevel >= 300) {
                 const hour = d.getHours();
-                const isWorkHour = (hour >= 8 && hour < 17 && !hol && !wknd);
+                const isWorkHour = (hour >= 8 && hour <= 17 && !hol && !wknd);
                 const classes = [];
                 if (isToday) classes.push("today_cell today_hour_cell");
                 if (hol) classes.push("holiday_cell");
@@ -1895,11 +1895,11 @@ export class AllInOneTimelineAction extends Component {
             if (scale.unit === "hour") {
                 const h = d.getHours();
                 if (isToday) {
-                    return (h >= 8 && h < 17 && !hol && !wknd) ? "today_scale_cell work_hour_scale_cell" : "today_scale_cell off_hour_scale_cell";
+                    return (h >= 8 && h <= 17 && !hol && !wknd) ? "today_scale_cell work_hour_scale_cell" : "today_scale_cell off_hour_scale_cell";
                 }
                 if (hol) return "holiday_scale_cell";
                 if (wknd) return "weekend_scale_cell";
-                return (h >= 8 && h < 17) ? "work_hour_scale_cell" : "off_hour_scale_cell";
+                return (h >= 8 && h <= 17) ? "work_hour_scale_cell" : "off_hour_scale_cell";
             }
 
             if (scale.unit === "day") {
@@ -2011,7 +2011,7 @@ export class AllInOneTimelineAction extends Component {
                 },
                 css: (date) => {
                     const h = date.getHours();
-                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
                         return "work_hour_scale_cell";
                     }
                     return "off_hour_scale_cell";
@@ -2029,7 +2029,7 @@ export class AllInOneTimelineAction extends Component {
                 },
                 css: (date) => {
                     const h = date.getHours();
-                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
                         return "work_hour_scale_cell";
                     }
                     return "off_hour_scale_cell";
@@ -2082,7 +2082,7 @@ export class AllInOneTimelineAction extends Component {
                 },
                 css: (date) => {
                     const h = date.getHours();
-                    if (h >= 8 && h < 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
+                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
                         return "work_hour_scale_cell";
                     }
                     return "off_hour_scale_cell";
