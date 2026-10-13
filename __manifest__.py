@@ -37,13 +37,14 @@ Pagrindinės funkcijos:
 * Tiesioginis planuoto laiko sinchronizavimas su faktinėmis darbo valandomis velkant tvarkaraštį.
 * Greitas eksportas į PDF, PNG paveikslėlį ir Excel (.xlsx).
 """,
-    "version": "1.6.1",
+    "version": "1.6.2",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",
     "license": "LGPL-3",
     "depends": ["project", "hr_timesheet"],
     "data": [
+        "security/gannt_lt_security.xml",
         "security/ir.model.access.csv",
         "views/project_task_pause_wizard_views.xml",
         "views/project_task_views.xml",

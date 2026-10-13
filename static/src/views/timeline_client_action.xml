@@ -16,7 +16,7 @@
                 <div class="all_in_one_timeline_container">
                     <!-- Top Toolbar -->
                     <div class="timeline_toolbar">
-                        <div class="toolbar_left">
+                        <div class="toolbar_left d-flex align-items-center gap-2">
                             <!-- Project Filter Dropdown -->
                             <select class="form-select form-select-sm project_select" style="width: 200px;" t-model="state.selectedProjectId" t-on-change="onProjectChange">
                                 <option value="0">Visi projektai</option>
@@ -24,6 +24,9 @@
                                     <option t-att-value="p.id" t-esc="p.name"/>
                                 </t>
                             </select>
+                            <span t-if="!state.canEdit" class="badge bg-secondary text-white px-2 py-1" title="Jūs turite tik peržiūros (Can View) teises">
+                                <i class="fa fa-eye me-1"/>Tik peržiūra
+                            </span>
                         </div>
 
                         <div class="toolbar_right">

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record model="res.groups.privilege" id="res_groups_privilege_gannt_lt">
+        <field name="name">GanntLT</field>
+        <field name="sequence">15</field>
+        <field name="category_id" ref="base.module_category_services"/>
+    </record>
+
+    <record id="group_gannt_lt_user" model="res.groups">
+        <field name="name">Can View</field>
+        <field name="comment">Can View: User can view the GanntLT timeline, filter, zoom, and open tasks, but cannot drag, resize, or modify the timeline.</field>
+        <field name="sequence">10</field>
+        <field name="privilege_id" ref="res_groups_privilege_gannt_lt"/>
+        <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+    </record>
+
+    <record id="group_gannt_lt_manager" model="res.groups">
+        <field name="name">Can Edit</field>
+        <field name="comment">Can Edit: Full access to edit the GanntLT timeline (drag-and-drop dates, resize bars, manage dependency links, delete items).</field>
+        <field name="sequence">20</field>
+        <field name="privilege_id" ref="res_groups_privilege_gannt_lt"/>
+        <field name="implied_ids" eval="[(4, ref('GanntLT.group_gannt_lt_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+    </record>
+</odoo>

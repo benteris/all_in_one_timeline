@@ -408,6 +408,7 @@ export class GanntLTAction extends Component {
             zoomLevel: initialZoom,
             projects: [],
             undoCount: 0,
+            canEdit: true,
         });
 
         this.undoStack = [];
@@ -491,7 +492,7 @@ export class GanntLTAction extends Component {
     }
 
     get canUndo() {
-        return (this.state.undoCount || 0) > 0;
+        return this.state.canEdit && (this.state.undoCount || 0) > 0;
     }
 
     get display() {
@@ -1174,7 +1175,7 @@ export class GanntLTAction extends Component {
 
         // Cascading Drag-and-Drop: record start/end dates for parent and all descendants
         this.eventIds.push(g.attachEvent("onBeforeTaskDrag", (id, mode) => {
-            if (mode === "progress") {
+            if (!this.state.canEdit || mode === "progress") {
                 return false;
             }
             this.hideTooltip();
@@ -1421,21 +1422,33 @@ export class GanntLTAction extends Component {
                 }
             }
 
-            // Visually expand parent task / milestone in real-time if child bounds exceed them
+            // Visually adjust parent task / milestone / project in real-time from children bounds
             if (task.parent && g.isTaskExists && g.isTaskExists(task.parent)) {
                 let p = g.getTask(task.parent);
                 while (p) {
-                    let parentUpdated = false;
-                    if (task.start_date < p.start_date) {
-                        p.start_date = new Date(task.start_date);
-                        parentUpdated = true;
-                    }
-                    if (task.end_date > p.end_date) {
-                        p.end_date = new Date(task.end_date);
-                        parentUpdated = true;
-                    }
-                    if (parentUpdated) {
-                        g.updateTask(p.id);
+                    const pChildren = (typeof g.getChildren === "function" ? g.getChildren(p.id) : []) || [];
+                    if (pChildren.length > 0) {
+                        let minCS = null;
+                        let maxCE = null;
+                        for (const cid of pChildren) {
+                            const ct = g.getTask(cid);
+                            if (ct && ct.start_date && ct.end_date) {
+                                if (!minCS || ct.start_date < minCS) minCS = ct.start_date;
+                                if (!maxCE || ct.end_date > maxCE) maxCE = ct.end_date;
+                            }
+                        }
+                        let parentUpdated = false;
+                        if (minCS && (!p.start_date || p.start_date.getTime() !== minCS.getTime())) {
+                            p.start_date = new Date(minCS);
+                            parentUpdated = true;
+                        }
+                        if (maxCE && (!p.end_date || p.end_date.getTime() !== maxCE.getTime())) {
+                            p.end_date = new Date(maxCE);
+                            parentUpdated = true;
+                        }
+                        if (parentUpdated) {
+                            g.updateTask(p.id);
+                        }
                     }
                     p = (p.parent && g.isTaskExists(p.parent)) ? g.getTask(p.parent) : null;
                 }
@@ -1499,6 +1512,23 @@ export class GanntLTAction extends Component {
             if (task.is_milestone) {
                 task.planned_date_start = formatOdooDateTime(workStart);
                 task.planned_date_end = formatOdooDateTime(workEnd);
+            }
+
+            // Re-evaluate deadline delay on dragged task: only delayed if explicit date_deadline > end_date or active timer
+            if (task.deadline_end && task.date_deadline) {
+                const dlEnd = task.deadline_end instanceof Date
+                    ? task.deadline_end
+                    : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                if (!isNaN(dlEnd.getTime()) && dlEnd > task.end_date) {
+                    task.has_deadline_delay = true;
+                    task.delay_days = Math.max(1, Math.round((dlEnd.getTime() - task.end_date.getTime()) / 86400000));
+                } else {
+                    task.has_deadline_delay = false;
+                    task.delay_days = 0;
+                }
+            } else if (!task.timer_running) {
+                task.has_deadline_delay = false;
+                task.delay_days = 0;
             }
 
             // Real-time update of allocated working hours from darbo valandos
@@ -1596,6 +1626,57 @@ export class GanntLTAction extends Component {
             try {
                 await this.orm.call("project.task", "save_timeline_batch_schedule", [updates]);
 
+                // Update ancestor containers (parent task, milestone, project) in real-time to encompass children without creating fake deadline delays
+                let currParentId = task.parent;
+                while (currParentId && g.isTaskExists(currParentId)) {
+                    const parent = g.getTask(currParentId);
+                    const pChildren = (typeof g.getChildren === "function" ? g.getChildren(currParentId) : []) || [];
+                    if (pChildren.length > 0) {
+                        let minCS = null;
+                        let maxCE = null;
+                        let maxDelayedDl = null;
+                        for (const cid of pChildren) {
+                            const ct = g.getTask(cid);
+                            if (ct && ct.start_date && ct.end_date) {
+                                if (!minCS || ct.start_date < minCS) minCS = new Date(ct.start_date);
+                                if (!maxCE || ct.end_date > maxCE) maxCE = new Date(ct.end_date);
+                                if (ct.has_deadline_delay && ct.deadline_end) {
+                                    const cDl = ct.deadline_end instanceof Date
+                                        ? ct.deadline_end
+                                        : new Date(String(ct.deadline_end).replace(/-/g, "/"));
+                                    if (!isNaN(cDl.getTime()) && (!maxDelayedDl || cDl > maxDelayedDl)) {
+                                        maxDelayedDl = cDl;
+                                    }
+                                }
+                            }
+                        }
+                        if (minCS && maxCE) {
+                            parent.start_date = minCS;
+                            parent.end_date = maxCE;
+                            const pWork = isHourlyMode
+                                ? { workStart: new Date(minCS), workEnd: new Date(maxCE) }
+                                : computeWorkDates(minCS, maxCE);
+                            parent.work_start_date = formatOdooDateTime(pWork.workStart);
+                            parent.work_end_date = formatOdooDateTime(pWork.workEnd);
+                            const pWorkCalc = calculateWorkingDaysAndHours(pWork.workStart, pWork.workEnd);
+                            parent.allocated_hours = `${pWorkCalc.workHours}h`;
+                        }
+                        if (maxDelayedDl && parent.end_date && maxDelayedDl > parent.end_date) {
+                            parent.deadline_end = formatOdooDateTime(maxDelayedDl);
+                            parent.has_deadline = true;
+                            parent.has_deadline_delay = true;
+                            parent.delay_days = Math.max(1, Math.round((maxDelayedDl.getTime() - parent.end_date.getTime()) / 86400000));
+                        } else if (!parent.date_deadline) {
+                            parent.has_deadline_delay = false;
+                            parent.delay_days = 0;
+                        }
+                        if (!needsScaleExpand) {
+                            g.updateTask(currParentId);
+                        }
+                    }
+                    currParentId = parent.parent;
+                }
+
                 if (needsScaleExpand) {
                     this.ensureTimelineRange(task.start_date, task.end_date);
                     g.render();
@@ -1609,25 +1690,6 @@ export class GanntLTAction extends Component {
                         if (u.id !== task.id && g.isTaskExists(u.id)) {
                             g.updateTask(u.id);
                         }
-                    }
-
-                    // Propagate extended deadline to parent tasks in Gantt view in real-time
-                    let currParentId = task.parent;
-                    while (currParentId && g.isTaskExists(currParentId)) {
-                        const parent = g.getTask(currParentId);
-                        const childEnd = task.deadline_end || task.end_date;
-                        if (childEnd && parent.end_date) {
-                            const cDate = childEnd instanceof Date ? childEnd : new Date(String(childEnd).replace(/-/g, "/"));
-                            const pDate = parent.end_date instanceof Date ? parent.end_date : new Date(String(parent.end_date).replace(/-/g, "/"));
-                            if (cDate > pDate) {
-                                parent.deadline_end = childEnd;
-                                parent.has_deadline = true;
-                                parent.has_deadline_delay = true;
-                                parent.delay_days = Math.max(1, Math.round((cDate.getTime() - pDate.getTime()) / 86400000));
-                                g.updateTask(currParentId);
-                            }
-                        }
-                        currParentId = parent.parent;
                     }
                     this.renderTodayMarker();
                 }
@@ -1655,7 +1717,17 @@ export class GanntLTAction extends Component {
 
         // Dependency Link Events
         this.eventIds.push(g.attachEvent("onBeforeLinkAdd", () => {
+            if (!this.state.canEdit) {
+                return false;
+            }
             this.hideTooltip();
+            return true;
+        }));
+
+        this.eventIds.push(g.attachEvent("onBeforeLinkDelete", () => {
+            if (!this.state.canEdit) {
+                return false;
+            }
             return true;
         }));
 
@@ -1715,6 +1787,9 @@ export class GanntLTAction extends Component {
                     this.openTaskFormDialog(id);
                 } else if (action === "edit_milestone") {
                     this.openMilestoneFormDialog(id);
+                } else if (!this.state.canEdit) {
+                    this.notification.add(_t("Jūs turite tik peržiūros („Can View“) teises."), { type: "warning" });
+                    return;
                 } else if (action === "delete") {
                     if (confirm(_t("Ar tikrai norite ištrinti šią užduotį?"))) {
                         await this.orm.call("project.task", "delete_timeline_task", [id]);
@@ -2150,6 +2225,12 @@ export class GanntLTAction extends Component {
             });
 
             this.state.projects = data.projects || [];
+            const canEdit = data.can_edit !== false;
+            this.state.canEdit = canEdit;
+            this.gantt.config.readonly = !canEdit;
+            this.gantt.config.drag_move = canEdit;
+            this.gantt.config.drag_resize = canEdit;
+            this.gantt.config.drag_links = canEdit;
 
             // Preserve scroll position (both in pixel offset and anchor date) and open/closed branch states
             const scrollPos = this.gantt.getScrollState ? this.gantt.getScrollState() : null;
@@ -2612,6 +2693,9 @@ export class GanntLTAction extends Component {
     }
 
     async undoAction() {
+        if (!this.state.canEdit) {
+            return;
+        }
         if (!this.undoStack || !this.undoStack.length) {
             this.notification.add(_t("Nėra veiksmų atšaukimui"), { type: "warning" });
             return;
