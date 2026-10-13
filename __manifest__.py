@@ -53,10 +53,10 @@ Pagrindinės funkcijos:
     ],
     "assets": {
         "web.assets_backend": [
-            "GanntLT/static/lib/dhtmlx_gantt/dhtmlxgantt.js",
-            "GanntLT/static/lib/dhtmlx_gantt/dhtmlxgantt.css",
-            "GanntLT/static/lib/xlsx/xlsx.mini.min.js",
-            "GanntLT/static/lib/html2canvas/html2canvas.min.js",
+            "GanntLT/static/src/vendor/dhtmlx_gantt/dhtmlxgantt.js",
+            "GanntLT/static/src/vendor/dhtmlx_gantt/dhtmlxgantt.css",
+            "GanntLT/static/src/vendor/xlsx/xlsx.mini.min.js",
+            "GanntLT/static/src/vendor/html2canvas/html2canvas.min.js",
             "GanntLT/static/src/scss/gannt_lt.scss",
             "GanntLT/static/src/components/task_timer_widget/task_timer_widget.js",
             "GanntLT/static/src/components/task_timer_widget/task_timer_widget.xml",
