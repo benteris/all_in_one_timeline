@@ -56,28 +56,33 @@
                 <button name="action_timer_start"
                         type="object"
                         string="Pradėti"
-                        class="btn-success me-1"
+                        class="btn-primary"
                         icon="fa-play"
                         invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
                         string="Pristabdyti"
-                        class="btn-warning me-1"
+                        class="btn-secondary"
                         icon="fa-pause"
                         invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
                         string="Baigti"
-                        class="btn-success me-2"
+                        class="btn-success"
                         icon="fa-check"
                         invisible="state in ['1_done', '1_canceled']"/>
                 <button name="action_timer_reopen"
                         type="object"
                         string="Atnaujinti"
-                        class="btn-secondary me-2"
+                        class="btn-secondary"
                         icon="fa-undo"
                         invisible="state not in ['1_done', '1_canceled']"/>
                 <widget name="task_timer_widget"/>
+            </xpath>
+
+            <!-- Ensure Sub-tasks tab is visible on all tasks and subtasks regardless of parent or depth -->
+            <xpath expr="//page[@name='sub_tasks_page']" position="attributes">
+                <attribute name="invisible">0</attribute>
             </xpath>
 
             <!-- Show Allocated hours and Effective hours in subtasks list view -->

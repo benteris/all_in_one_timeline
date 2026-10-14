@@ -2,6 +2,7 @@ from odoo import models, fields, api, _
 from odoo.tools.misc import format_datetime
 from markupsafe import Markup
 import logging
+import math
 
 _logger = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class ProjectTaskPauseWizard(models.TransientModel):
         if not task:
             return {"type": "ir.actions.act_window_close"}
 
+        if not task.is_timer_running:
+            # Timer already stopped (double click / stale dialog): never log time twice.
+            return {"type": "ir.actions.act_window_close"}
+
         now = fields.Datetime.now()
         t_start = task.timer_start or self.timer_start or now
         diff_sec = max(0, int((now - t_start).total_seconds()))
@@ -64,7 +69,8 @@ class ProjectTaskPauseWizard(models.TransientModel):
         cur_total_sec = max(task.timer_total_seconds or 0, eff_sec)
         new_total_sec = cur_total_sec + diff_sec
 
-        elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2)) if diff_sec > 0 else 0.0
+        elapsed_min = max(1, int(math.ceil(diff_sec / 60.0 - 1e-9))) if diff_sec > 0 else 0
+        elapsed_hours = elapsed_min / 60.0
         mins = diff_sec // 60
         rem_sec = diff_sec % 60
         dur_str = f"{mins} min. {rem_sec} sek." if mins > 0 else f"{diff_sec} sek."
@@ -102,16 +108,20 @@ class ProjectTaskPauseWizard(models.TransientModel):
 
         chatter_body = (
             f"⏸️ <b>Darbai pristabdyti (Task Paused):</b> {user_name} pristabdė darbą [{pause_time_str}].<br/>"
-            f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_hours} val. ({dur_str})<br/>"
+            f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_min} min. (faktiškai {dur_str})<br/>"
             f"• <b>Priežastis:</b> {self.reason}"
         )
         task.message_post(body=Markup(chatter_body), subtype_xmlid="mail.mt_note")
 
         # 3. Update task timer state and accumulated seconds
-        task.write({
+        pause_vals = {
             "is_timer_running": False,
             "timer_start": False,
             "timer_total_seconds": new_total_sec,
-        })
+        }
+        stop_vals, _info = task._work_stop_vals(now, new_total_sec, finished=False)
+        pause_vals.update(stop_vals)
+        task.with_context(gannt_auto_plan=True).write(pause_vals)
+        task._propagate_deadline_upward()
 
         return {"type": "ir.actions.act_window_close"}

@@ -3,6 +3,7 @@
 import { Component, onMounted, useRef, useState, onWillUnmount, onWillUpdateProps } from "@odoo/owl";
 import { registry } from "@web/core/registry";
 import { useService } from "@web/core/utils/hooks";
+import { ConfirmationDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { _t } from "@web/core/l10n/translation";
 import { Layout } from "@web/search/layout";
 import { SearchBar } from "@web/search/search_bar/search_bar";
@@ -27,39 +28,43 @@ export const LITHUANIAN_MONTHS = [
 ];
 
 export const LITHUANIAN_MONTHS_SHORT = [
-    "Sau",
+    "Saus",
     "Vas",
     "Kov",
     "Bal",
     "Geg",
-    "Bir",
-    "Lie",
-    "Rgp",
-    "Rgs",
-    "Spa",
-    "Lap",
-    "Gru",
+    "Birž",
+    "Liep",
+    "Rugp",
+    "Rugs",
+    "Spal",
+    "Lapkr",
+    "Gruod",
 ];
 
-export const ZOOM_STEPS = [10, 15, 20, 35, 50, 75, 100, 150, 200, 250, 300, 400, 500, 600];
+export const ZOOM_STEPS = Array.from({ length: 21 }, (_, i) => i * 5);
+export const DEFAULT_OVERVIEW_ZOOM = 0;
 export const TIMELINE_VIEW_STATE_KEY = "gannt_lt_viewport_state";
 
-export const ZOOM_PX_PER_DAY = {
-    600: 24 * 4 * 32,
-    500: 24 * 60,
-    400: 24 * 40,
-    300: 24 * 24,
-    250: 80,
-    200: 64,
-    150: 48,
-    100: 32,
-    75: 24,
-    50: 18,
-    35: 32 / 7,
-    20: 24 / 7,
-    15: 18 / 7,
-    10: 14 / 7,
-};
+export function getZoomPxPerDay(zoomLevel, visibleWidth = 1100) {
+    const z = Math.max(0, Math.min(100, Number(zoomLevel) || 0));
+    const t = z / 100.0;
+    const vw = Math.max(600, Number(visibleWidth) || 1100);
+    const minPx = vw / 2000.0; // At 0% zoom: ~5.5 years across visible width
+    const p95 = vw * 24.0; // At 95% zoom: exactly 60 minutes (1 hour) fits visible width
+    const base = Math.pow(p95 / minPx, 1.0 / 0.95);
+    return minPx * Math.pow(base, t);
+}
+
+export const ZOOM_PX_PER_DAY = new Proxy({}, {
+    get(target, prop) {
+        const lvl = Number(prop);
+        if (!isNaN(lvl)) {
+            return getZoomPxPerDay(lvl);
+        }
+        return 32;
+    }
+});
 
 export const LITHUANIAN_MONTHS_GENITIVE = [
     "sausio",
@@ -202,11 +207,192 @@ export function formatOdooDateTime(date) {
 }
 
 /**
- * Calculates actual working days and hours between start and end dates.
- * Excludes weekends (Saturday, Sunday) and Lithuanian national holidays.
- * Working hours are strictly counted as 8 hours per actual working day (8:00 - 17:00).
+ * Human duration from minutes: "16 min", "1 val. 5 min", "2 d. 3 val.".
+ * Same rules as the backend: whole minutes, rounded UP, never below 1 minute when > 0.
  */
-export function calculateWorkingDaysAndHours(startDate, endDate) {
+export function formatDurationMinutes(totalMin) {
+    let m = Math.max(0, Math.ceil((Number(totalMin) || 0) - 1e-9));
+    if (m < 60) return `${m} min`;
+    const days = Math.floor(m / 1440);
+    const rem = m % 1440;
+    const hours = Math.floor(rem / 60);
+    const mins = rem % 60;
+    const parts = [];
+    if (days) parts.push(`${days} d.`);
+    if (hours) parts.push(`${hours} val.`);
+    if (mins && !days) parts.push(`${mins} min`);
+    return parts.join(" ") || "0 min";
+}
+
+/**
+ * Compact allocated-hours label: "16 min", "8h", "1h 30min" (instead of "0.1h").
+ */
+export function formatHoursLabel(hours) {
+    const h = Number(hours) || 0;
+    if (h <= 0) return "";
+    const total = Math.max(1, Math.round(h * 60));
+    if (total < 60) return `${total} min`;
+    const hh = Math.floor(total / 60);
+    const mm = total % 60;
+    return mm === 0 ? `${hh}h` : `${hh}h ${mm}min`;
+}
+
+/**
+ * Parses labels produced by formatHoursLabel ("16 min", "8h", "1h 30min", legacy "0.1h") back to hours.
+ */
+export function parseHoursLabel(label) {
+    if (typeof label === "number") return label;
+    const s = String(label || "").trim();
+    if (!s) return 0;
+    let hours = 0;
+    const h = s.match(/(\d+(?:[.,]\d+)?)\s*h/i);
+    const m = s.match(/(\d+(?:[.,]\d+)?)\s*min/i);
+    if (h) hours += parseFloat(h[1].replace(",", "."));
+    if (m) hours += parseFloat(m[1].replace(",", ".")) / 60;
+    if (!h && !m) hours = parseFloat(s.replace(",", ".")) || 0;
+    return hours;
+}
+
+
+/**
+ * Default working hours schedule for Monday through Sunday.
+ * Active days: Monday-Friday (08:00 - 17:00, lunch 12:45 - 13:45).
+ * Inactive days: Saturday-Sunday.
+ */
+export const DEFAULT_WORKING_HOURS = {
+    1: { dayIndex: 1, name: "Pirmadienis", shortName: "I", active: true, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    2: { dayIndex: 2, name: "Antradienis", shortName: "II", active: true, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    3: { dayIndex: 3, name: "Trečiadienis", shortName: "III", active: true, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    4: { dayIndex: 4, name: "Ketvirtadienis", shortName: "IV", active: true, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    5: { dayIndex: 5, name: "Penktadienis", shortName: "V", active: true, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    6: { dayIndex: 6, name: "Šeštadienis", shortName: "VI", active: false, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+    0: { dayIndex: 0, name: "Sekmadienis", shortName: "VII", active: false, start: "08:00", lunchStart: "12:45", lunchEnd: "13:45", end: "17:00" },
+};
+
+export const STORAGE_KEY_WORK_HOURS = "gannt_lt_working_hours_schedule_v2";
+
+/**
+ * Normalizes user input time string into 24-hour HH:mm format (e.g. "8" -> "08:00", "1245" -> "12:45").
+ */
+export function normalizeTimeInput(val, defaultVal = "08:00") {
+    if (!val || typeof val !== "string") return defaultVal;
+    let s = val.trim().replace(/[^\d:]/g, "");
+    if (!s) return defaultVal;
+
+    if (/^\d{1,2}$/.test(s)) {
+        let h = parseInt(s, 10);
+        if (h >= 0 && h <= 23) {
+            return `${h < 10 ? "0" + h : h}:00`;
+        }
+    }
+    if (/^\d{3,4}$/.test(s)) {
+        let h = parseInt(s.length === 3 ? s.slice(0, 1) : s.slice(0, 2), 10);
+        let m = parseInt(s.slice(-2), 10);
+        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+            return `${h < 10 ? "0" + h : h}:${m < 10 ? "0" + m : m}`;
+        }
+    }
+    const match = s.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (match) {
+        let h = parseInt(match[1], 10);
+        let m = parseInt(match[2], 10);
+        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+            return `${h < 10 ? "0" + h : h}:${m < 10 ? "0" + m : m}`;
+        }
+    }
+    return defaultVal;
+}
+
+export function getActiveWorkingHoursSchedule() {
+    try {
+        if (typeof window !== "undefined" && window.localStorage) {
+            const saved = window.localStorage.getItem(STORAGE_KEY_WORK_HOURS);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed && typeof parsed === "object") {
+                    const merged = {};
+                    for (let i = 0; i <= 6; i++) {
+                        merged[i] = Object.assign({}, DEFAULT_WORKING_HOURS[i], parsed[i] || {});
+                    }
+                    return merged;
+                }
+            }
+        }
+    } catch {
+        // fallback
+    }
+    return DEFAULT_WORKING_HOURS;
+}
+
+export function isWorkingDay(date, schedule = null) {
+    if (!date) return false;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return false;
+    if (getLithuanianHoliday(d)) return false;
+    const sched = schedule || getActiveWorkingHoursSchedule();
+    const cfg = sched ? sched[d.getDay()] : DEFAULT_WORKING_HOURS[d.getDay()];
+    return !!(cfg && cfg.active);
+}
+
+export function getIntervalWorkMinutes(date, stepMinutes = 0, schedule = null) {
+    if (!date) return 0;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return 0;
+    if (getLithuanianHoliday(d)) return 0;
+
+    const sched = schedule || getActiveWorkingHoursSchedule();
+    const cfg = sched ? sched[d.getDay()] : DEFAULT_WORKING_HOURS[d.getDay()];
+    if (!cfg || !cfg.active) return 0;
+
+    const step = stepMinutes > 0 ? stepMinutes : 1;
+    const startMin = d.getHours() * 60 + d.getMinutes();
+    const endMin = startMin + step;
+
+    const parseTimeToMin = (tStr, defVal) => {
+        if (!tStr) return defVal;
+        const parts = String(tStr).split(":");
+        if (parts.length < 2) return defVal;
+        return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+    };
+
+    const wStart = parseTimeToMin(cfg.start, 480);
+    const wEnd = parseTimeToMin(cfg.end, 1020);
+    const lStart = parseTimeToMin(cfg.lunchStart, null);
+    const lEnd = parseTimeToMin(cfg.lunchEnd, null);
+
+    const oStart = Math.max(startMin, wStart);
+    const oEnd = Math.min(endMin, wEnd);
+    if (oEnd <= oStart) return 0;
+
+    let workDuration = oEnd - oStart;
+
+    if (lStart !== null && lEnd !== null && lEnd > lStart) {
+        const loStart = Math.max(oStart, lStart);
+        const loEnd = Math.min(oEnd, lEnd);
+        if (loEnd > loStart) {
+            workDuration -= (loEnd - loStart);
+        }
+    }
+
+    return Math.max(0, workDuration);
+}
+
+export function isWorkingDateTime(date, schedule = null, stepMinutes = 0) {
+    if (!date) return false;
+    const step = stepMinutes > 0 ? stepMinutes : 1;
+    const workMins = getIntervalWorkMinutes(date, step, schedule);
+    if (step <= 1) {
+        return workMins > 0;
+    }
+    return workMins >= Math.ceil(step / 2);
+}
+
+/**
+ * Calculates actual working days and hours between start and end dates.
+ * Excludes weekends / inactive days and Lithuanian national holidays.
+ * Respects configured intra-day working hours and lunch break.
+ */
+export function calculateWorkingDaysAndHours(startDate, endDate, schedule = null) {
     if (!startDate || !endDate) {
         return { workDays: 0, workHours: 0, calendarDays: 0 };
     }
@@ -216,72 +402,120 @@ export function calculateWorkingDaysAndHours(startDate, endDate) {
         return { workDays: 0, workHours: 0, calendarDays: 0 };
     }
 
+    const sched = schedule || getActiveWorkingHoursSchedule();
+
     // Determine calendar start day and end day
     const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
     let endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate());
 
-    // If endDate is exactly midnight (00:00:00) and is on a later day than startDay,
-    // in Gantt semantics it designates the boundary ending the previous day.
     if (e.getHours() === 0 && e.getMinutes() === 0 && e.getSeconds() === 0 && endDay.getTime() > startDay.getTime()) {
         endDay.setDate(endDay.getDate() - 1);
     }
 
     const isSingleDay = (s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate());
-    const isFullDayStd = (s.getHours() === 8 && s.getMinutes() === 0 && e.getHours() === 17 && e.getMinutes() === 0) || (s.getHours() === 0 && e.getHours() === 0);
 
     let totalWorkHours = 0;
     let totalWorkDays = 0;
     let totalCalendarDays = 0;
     const curr = new Date(startDay);
 
+    const parseTimeToMin = (tStr, defVal) => {
+        if (!tStr) return defVal;
+        const p = String(tStr).split(":");
+        if (p.length < 2) return defVal;
+        return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+    };
+
     while (curr <= endDay) {
         totalCalendarDays++;
-        if (!isWeekend(curr) && !getLithuanianHoliday(curr)) {
-            const dayWorkStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 8, 0, 0);
-            const dayWorkEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), 17, 0, 0);
+        const dayOfWeek = curr.getDay();
+        const cfg = sched ? sched[dayOfWeek] : DEFAULT_WORKING_HOURS[dayOfWeek];
+
+        if (cfg && cfg.active && !getLithuanianHoliday(curr)) {
+            const startMin = parseTimeToMin(cfg.start, 480);
+            const endMin = parseTimeToMin(cfg.end, 1020);
+            const lunchStartMin = parseTimeToMin(cfg.lunchStart, null);
+            const lunchEndMin = parseTimeToMin(cfg.lunchEnd, null);
+
+            let lunchDurationHours = 0;
+            if (lunchStartMin !== null && lunchEndMin !== null && lunchEndMin > lunchStartMin) {
+                lunchDurationHours = (lunchEndMin - lunchStartMin) / 60;
+            }
+            const standardDayHours = Math.max(0, (endMin - startMin) / 60 - lunchDurationHours);
+
+            const dayWorkStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(startMin / 60), startMin % 60, 0);
+            const dayWorkEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(endMin / 60), endMin % 60, 0);
 
             if (isSingleDay) {
-                if (isFullDayStd || (s <= dayWorkStart && e >= dayWorkEnd)) {
-                    totalWorkHours += 8.0;
+                const isFullDayStd = (s <= dayWorkStart && e >= dayWorkEnd) || (s.getHours() === 0 && e.getHours() === 0);
+                if (isFullDayStd) {
+                    totalWorkHours += standardDayHours;
                     totalWorkDays += 1;
                 } else {
                     const actStart = s > dayWorkStart ? s : dayWorkStart;
                     const actEnd = e < dayWorkEnd ? e : dayWorkEnd;
                     if (actEnd > actStart) {
-                        const h = (actEnd.getTime() - actStart.getTime()) / 3600000;
-                        const roundedH = (h >= 8.9 ? 8.0 : Math.round(h * 100) / 100);
+                        let h = (actEnd.getTime() - actStart.getTime()) / 3600000;
+                        if (lunchDurationHours > 0) {
+                            const lStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchStartMin / 60), lunchStartMin % 60, 0);
+                            const lEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchEndMin / 60), lunchEndMin % 60, 0);
+                            const oStart = actStart > lStart ? actStart : lStart;
+                            const oEnd = actEnd < lEnd ? actEnd : lEnd;
+                            if (oEnd > oStart) {
+                                h -= (oEnd.getTime() - oStart.getTime()) / 3600000;
+                            }
+                        }
+                        const roundedH = Math.round(Math.max(0, Math.min(standardDayHours, h)) * 100) / 100;
                         totalWorkHours += roundedH;
-                        totalWorkDays += (roundedH >= 8 ? 1 : Math.round((roundedH / 8) * 10) / 10);
+                        totalWorkDays += (roundedH >= standardDayHours ? 1 : Math.round((roundedH / (standardDayHours || 8)) * 10) / 10);
                     }
                 }
             } else if (curr.getTime() === startDay.getTime()) {
                 if (s <= dayWorkStart) {
-                    totalWorkHours += 8.0;
+                    totalWorkHours += standardDayHours;
                     totalWorkDays += 1;
                 } else {
                     const actStart = s > dayWorkStart ? s : dayWorkStart;
                     if (dayWorkEnd > actStart) {
-                        const h = (dayWorkEnd.getTime() - actStart.getTime()) / 3600000;
-                        const roundedH = Math.round(Math.min(8.0, h) * 100) / 100;
+                        let h = (dayWorkEnd.getTime() - actStart.getTime()) / 3600000;
+                        if (lunchDurationHours > 0) {
+                            const lStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchStartMin / 60), lunchStartMin % 60, 0);
+                            const lEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchEndMin / 60), lunchEndMin % 60, 0);
+                            const oStart = actStart > lStart ? actStart : lStart;
+                            const oEnd = dayWorkEnd < lEnd ? dayWorkEnd : lEnd;
+                            if (oEnd > oStart) {
+                                h -= (oEnd.getTime() - oStart.getTime()) / 3600000;
+                            }
+                        }
+                        const roundedH = Math.round(Math.max(0, Math.min(standardDayHours, h)) * 100) / 100;
                         totalWorkHours += roundedH;
-                        totalWorkDays += Math.round((roundedH / 8) * 10) / 10;
+                        totalWorkDays += Math.round((roundedH / (standardDayHours || 8)) * 10) / 10;
                     }
                 }
             } else if (curr.getTime() === endDay.getTime()) {
                 if (e >= dayWorkEnd) {
-                    totalWorkHours += 8.0;
+                    totalWorkHours += standardDayHours;
                     totalWorkDays += 1;
                 } else {
                     const actEnd = e < dayWorkEnd ? e : dayWorkEnd;
                     if (actEnd > dayWorkStart) {
-                        const h = (actEnd.getTime() - dayWorkStart.getTime()) / 3600000;
-                        const roundedH = Math.round(Math.min(8.0, h) * 100) / 100;
+                        let h = (actEnd.getTime() - dayWorkStart.getTime()) / 3600000;
+                        if (lunchDurationHours > 0) {
+                            const lStart = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchStartMin / 60), lunchStartMin % 60, 0);
+                            const lEnd = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate(), Math.floor(lunchEndMin / 60), lunchEndMin % 60, 0);
+                            const oStart = dayWorkStart > lStart ? dayWorkStart : lStart;
+                            const oEnd = actEnd < lEnd ? actEnd : lEnd;
+                            if (oEnd > oStart) {
+                                h -= (oEnd.getTime() - oStart.getTime()) / 3600000;
+                            }
+                        }
+                        const roundedH = Math.round(Math.max(0, Math.min(standardDayHours, h)) * 100) / 100;
                         totalWorkHours += roundedH;
-                        totalWorkDays += Math.round((roundedH / 8) * 10) / 10;
+                        totalWorkDays += Math.round((roundedH / (standardDayHours || 8)) * 10) / 10;
                     }
                 }
             } else {
-                totalWorkHours += 8.0;
+                totalWorkHours += standardDayHours;
                 totalWorkDays += 1;
             }
         }
@@ -289,7 +523,7 @@ export function calculateWorkingDaysAndHours(startDate, endDate) {
     }
 
     const workHours = Math.round(totalWorkHours * 10) / 10;
-    const workDays = workHours >= 8 && Number.isInteger(workHours / 8) ? (workHours / 8) : Math.round(totalWorkDays * 10) / 10;
+    const workDays = Math.round(totalWorkDays * 10) / 10;
 
     return {
         workDays,
@@ -347,6 +581,332 @@ export function computeWorkDates(startDate, endDate) {
     return { workStart, workEnd };
 }
 
+export function parseWorkDateStr(val) {
+    if (!val) return null;
+    if (val instanceof Date) return isNaN(val.getTime()) ? null : new Date(val);
+    const d = new Date(String(val).replace(/-/g, "/"));
+    return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Checks if a work interval has specific intra-day hours (not a standard full 08:00-17:00 workday).
+ */
+export function isIntraDayWorkSpan(workStartInput, workEndInput) {
+    const ws = parseWorkDateStr(workStartInput);
+    const we = parseWorkDateStr(workEndInput);
+    if (!ws || !we) return false;
+    const isStdStart = (ws.getHours() === 8 && ws.getMinutes() === 0) || (ws.getHours() === 0 && ws.getMinutes() === 0);
+    const isStdEnd = (we.getHours() === 17 && we.getMinutes() === 0) || (we.getHours() === 0 && we.getMinutes() === 0) || (we.getHours() === 23 && we.getMinutes() === 59);
+    return !(isStdStart && isStdEnd);
+}
+
+let _timelineViewportWidth = 1100;
+
+/**
+ * Remembers the current timeline viewport width (px) so grid helpers use the same
+ * pixel thresholds as the scale header (applyScaleConfig).
+ */
+export function setTimelineViewportWidth(width) {
+    const w = Number(width);
+    if (w > 0) {
+        _timelineViewportWidth = w;
+    }
+}
+
+/**
+ * True when the visible scale shows hour (or minute) columns, i.e. bars are positioned by real
+ * clock time. Uses the same threshold as the hour scale in applyScaleConfig (>= 11 px per hour),
+ * so snapping/positioning can never disagree with what the header shows.
+ */
+export function isExactTimeResolution(zoomLevel = 100, visibleWidth = _timelineViewportWidth) {
+    return (getZoomPxPerDay(zoomLevel, visibleWidth) / 24.0) >= 11;
+}
+
+/**
+ * Returns grid snapping step in minutes for the given zoom level (0 - 100).
+ * Day-level scales: 1 day. Hour scale: 15 min. Minute scale: 1 min.
+ */
+export function getGridStepMinutes(zoomLevel = 100) {
+    if (!isExactTimeResolution(zoomLevel)) return 1440; // 1 day
+    const pxPerMin = getZoomPxPerDay(zoomLevel, _timelineViewportWidth) / 1440.0;
+    return (pxPerMin * 30) >= 20 ? 1 : 15;
+}
+
+/**
+ * Returns minimum allowable duration in ms for the given zoom level / task type.
+ * Intra-day tasks and minute/hourly views always support 1-minute minimum duration.
+ */
+export function getMinGridDurationMs(zoomLevel = 100, isIntraDay = false) {
+    if (isExactTimeResolution(zoomLevel) || isIntraDay) {
+        return 60 * 1000; // 1 minute
+    }
+    return 1440 * 60 * 1000; // 1 day
+}
+
+/**
+ * Cleanly snaps a date to the active grid step based on the zoom level.
+ */
+export function snapDateToGrid(date, zoomLevel = 100) {
+    if (!date) return date;
+    const d = new Date(date);
+    const stepMin = getGridStepMinutes(zoomLevel);
+
+    if (stepMin === 1) {
+        if (d.getSeconds() >= 30) {
+            d.setMinutes(d.getMinutes() + 1);
+        }
+        d.setSeconds(0, 0);
+        return d;
+    }
+    if (stepMin < 60) {
+        d.setSeconds(0, 0);
+        const m = d.getMinutes();
+        const snappedM = Math.round(m / stepMin) * stepMin;
+        d.setMinutes(snappedM);
+        return d;
+    }
+    if (stepMin === 60) {
+        d.setSeconds(0, 0);
+        const m = d.getMinutes();
+        if (m >= 30) d.setHours(d.getHours() + 1);
+        d.setMinutes(0);
+        return d;
+    }
+    // Day level (>= 1440): snap to nearest midnight
+    d.setSeconds(0, 0);
+    const h = d.getHours();
+    if (h >= 12) d.setDate(d.getDate() + 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+}
+
+/**
+ * Converts actual working dates (e.g. 2026-10-13 08:00:00 .. 2026-10-13 10:00:00)
+ * into visual DHTMLX Gantt coordinates [gridStart, gridEnd].
+ * - For zoom >= 250% (Hourly / Minute scales): uses exact timestamps.
+ * - For zoom < 250% (Daily / Weekly / Multi-year scales):
+ *   Maps the working day window [08:00..17:00] proportionally onto the 24-hour day column [00:00..24:00]
+ *   so sequential intra-day tasks/subtasks (e.g. 08:00-10:00, 10:00-13:00, 13:00-15:00, 15:00-17:00)
+ *   appear one after another instead of stacking as identical full-day bars!
+ */
+export function workDatesToVisualGrid(workStartInput, workEndInput, zoomLevel = 100) {
+    const ws = parseWorkDateStr(workStartInput);
+    const we = parseWorkDateStr(workEndInput);
+
+    if (!ws || !we) {
+        const now = new Date();
+        const defS = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const defE = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
+        return { gridStart: defS, gridEnd: defE, start: defS, end: defE };
+    }
+
+    if (isExactTimeResolution(zoomLevel)) {
+        const s = new Date(ws);
+        let e = new Date(we);
+        if (e.getTime() <= s.getTime()) {
+            const minMs = getMinGridDurationMs(zoomLevel);
+            e = new Date(s.getTime() + minMs);
+        }
+        return { gridStart: s, gridEnd: e, start: s, end: e };
+    }
+
+    const mapTimeOnDay = (dt, isEnd = false) => {
+        const dayMidnight = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0);
+        const h = dt.getHours() + (dt.getMinutes() / 60.0) + (dt.getSeconds() / 3600.0);
+        if (!isEnd && h <= 8.0) {
+            return dayMidnight;
+        }
+        if (isEnd && (h >= 17.0 || (h === 0 && dt.getMinutes() === 0))) {
+            return new Date(dayMidnight.getTime() + 86400000);
+        }
+        const frac = Math.max(0.0, Math.min(1.0, (h - 8.0) / 9.0));
+        const offsetMs = Math.round(frac * 86400000);
+        return new Date(dayMidnight.getTime() + offsetMs);
+    };
+
+    const visStart = mapTimeOnDay(ws, false);
+    let visEnd = mapTimeOnDay(we, true);
+
+    if (visEnd.getTime() - visStart.getTime() < 5400000) {
+        const endDayBound = new Date(we.getFullYear(), we.getMonth(), we.getDate() + 1, 0, 0, 0);
+        if (visStart.getTime() + 5400000 <= endDayBound.getTime()) {
+            visEnd = new Date(visStart.getTime() + 5400000);
+        } else {
+            visEnd = endDayBound;
+        }
+    }
+
+    return { gridStart: visStart, gridEnd: visEnd, start: visStart, end: visEnd };
+}
+
+/**
+ * Inverse mapping from visual Gantt grid dates back to working dates (08:00-17:00) on drag/resize.
+ */
+export function visualGridToWorkDates(visStartInput, visEndInput, zoomLevel = 100, prevWorkStart = null, prevWorkEnd = null, mode = "move") {
+    const vs = new Date(visStartInput);
+    const ve = new Date(visEndInput);
+    if (isExactTimeResolution(zoomLevel)) {
+        vs.setSeconds(0, 0);
+        ve.setSeconds(0, 0);
+        const minMs = getMinGridDurationMs(zoomLevel);
+        if (ve.getTime() <= vs.getTime()) {
+            ve.setTime(vs.getTime() + minMs);
+        }
+        return { workStart: vs, workEnd: ve };
+    }
+
+    const wasSubDayTask = (typeof prevWorkStart === "boolean")
+        ? prevWorkStart
+        : isIntraDayWorkSpan(prevWorkStart, prevWorkEnd);
+
+    if (wasSubDayTask) {
+        const unmapTimeOnDay = (dt, isEnd = false) => {
+            const dayMidnight = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0);
+            const elapsedMs = dt.getTime() - dayMidnight.getTime();
+            if (isEnd && elapsedMs === 0) {
+                const prevDay = new Date(dayMidnight.getTime() - 86400000);
+                return new Date(prevDay.getFullYear(), prevDay.getMonth(), prevDay.getDate(), 17, 0, 0);
+            }
+            const frac = Math.max(0.0, Math.min(1.0, elapsedMs / 86400000));
+            const workHourFloat = Math.round((8.0 + frac * 9.0) * 4) / 4;
+            const hours = Math.floor(workHourFloat);
+            const mins = Math.round((workHourFloat - hours) * 60);
+            return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), hours, mins, 0);
+        };
+        const ws = unmapTimeOnDay(vs, false);
+        let we = unmapTimeOnDay(ve, true);
+        if (we.getTime() <= ws.getTime()) {
+            we = new Date(ws.getTime() + 3600000);
+        }
+        return { workStart: ws, workEnd: we };
+    }
+
+    const roundToMidnight = (dt) => {
+        const d = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0);
+        if (dt.getHours() >= 12) {
+            d.setDate(d.getDate() + 1);
+        }
+        return d;
+    };
+    const sMid = roundToMidnight(vs);
+    let eMid = roundToMidnight(ve);
+    if (eMid.getTime() <= sMid.getTime()) {
+        eMid = new Date(sMid.getTime() + 86400000);
+    }
+    return computeWorkDates(sMid, eMid);
+}
+
+export function addCalendarDays(date, n) {
+    const d = new Date(date);
+    d.setDate(d.getDate() + n);
+    return d;
+}
+
+function withTimeOfDay(dayRef, todRef) {
+    const d = new Date(dayRef);
+    d.setHours(todRef.getHours(), todRef.getMinutes(), todRef.getSeconds(), 0);
+    return d;
+}
+
+/** Smallest valid end on the task's start day (keeps the end's time-of-day when possible). */
+function clampSameDayEnd(ws, we) {
+    let c = withTimeOfDay(ws, we);
+    if (c.getTime() > ws.getTime()) return c;
+    c = new Date(ws);
+    c.setHours(17, 0, 0, 0);
+    if (c.getTime() > ws.getTime()) return c;
+    return new Date(ws.getTime() + 3600000);
+}
+
+/** Latest valid start on the task's end day (keeps the start's time-of-day when possible). */
+function clampSameDayStart(ws, we) {
+    let c = withTimeOfDay(we, ws);
+    if (c.getTime() < we.getTime()) return c;
+    c = new Date(we);
+    c.setHours(8, 0, 0, 0);
+    if (c.getTime() < we.getTime()) return c;
+    return new Date(we.getTime() - 3600000);
+}
+
+/**
+ * Computes the new work dates of a dragged task directly in work-time (never by inverse-mapping the
+ * squeezed visual grid, which is lossy).
+ * - Hour/minute scales: bars are at real clock time; the dragged edge is snapped to the grid step.
+ * - Day-level scales: the pointer can only express whole days, so the result is original work dates
+ *   shifted by whole calendar days; time-of-day and duration are preserved exactly.
+ * - If the pointer did not move by at least half a grid step, nothing changes (no-op release).
+ */
+export function computeDragWorkDates({ mode, isStartHandle, origWS, origWE, origGS, origGE, rawStart, rawEnd, zoomLevel }) {
+    const unchanged = { workStart: new Date(origWS), workEnd: new Date(origWE), changed: false };
+    const minMs = 60 * 1000;
+
+    if (isExactTimeResolution(zoomLevel)) {
+        const stepMs = getGridStepMinutes(zoomLevel) * 60000;
+        if (mode === "move") {
+            if (Math.abs(rawStart.getTime() - origGS.getTime()) < stepMs / 2) return unchanged;
+            const ns = snapDateToGrid(rawStart, zoomLevel);
+            return { workStart: ns, workEnd: new Date(ns.getTime() + (origWE.getTime() - origWS.getTime())), changed: true };
+        }
+        if (isStartHandle) {
+            if (Math.abs(rawStart.getTime() - origGS.getTime()) < stepMs / 2) return unchanged;
+            let ns = snapDateToGrid(rawStart, zoomLevel);
+            if (origWE.getTime() - ns.getTime() < minMs) ns = new Date(origWE.getTime() - minMs);
+            return { workStart: ns, workEnd: new Date(origWE), changed: true };
+        }
+        if (Math.abs(rawEnd.getTime() - origGE.getTime()) < stepMs / 2) return unchanged;
+        let ne = snapDateToGrid(rawEnd, zoomLevel);
+        if (ne.getTime() - origWS.getTime() < minMs) ne = new Date(origWS.getTime() + minMs);
+        return { workStart: new Date(origWS), workEnd: ne, changed: true };
+    }
+
+    const DAY = 86400000;
+    if (mode === "move") {
+        const k = Math.round((rawStart.getTime() - origGS.getTime()) / DAY);
+        if (k === 0) return unchanged;
+        return { workStart: addCalendarDays(origWS, k), workEnd: addCalendarDays(origWE, k), changed: true };
+    }
+    if (isStartHandle) {
+        const k = Math.round((rawStart.getTime() - origGS.getTime()) / DAY);
+        if (k === 0) return unchanged;
+        let ns = addCalendarDays(origWS, k);
+        if (ns.getTime() >= origWE.getTime()) ns = clampSameDayStart(origWS, origWE);
+        return { workStart: ns, workEnd: new Date(origWE), changed: true };
+    }
+    const k = Math.round((rawEnd.getTime() - origGE.getTime()) / DAY);
+    if (k === 0) return unchanged;
+    let ne = addCalendarDays(origWE, k);
+    if (ne.getTime() <= origWS.getTime()) ne = clampSameDayEnd(origWS, origWE);
+    return { workStart: new Date(origWS), workEnd: ne, changed: true };
+}
+
+/**
+ * Scales a child's work span proportionally from the parent's original work span into the parent's
+ * new (shrunk) work span, entirely in work-time. Result always stays inside the new parent span.
+ */
+export function scaleWorkSpanIntoParent(cWS, cWE, pOrigWS, pOrigWE, pNewWS, pNewWE, roundMs = 60000) {
+    const pOrigDur = pOrigWE.getTime() - pOrigWS.getTime();
+    const pNewDur = pNewWE.getTime() - pNewWS.getTime();
+    if (pOrigDur <= 0 || pNewDur <= 0) {
+        return { workStart: new Date(cWS), workEnd: new Date(cWE) };
+    }
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+    const fs = clamp01((cWS.getTime() - pOrigWS.getTime()) / pOrigDur);
+    const fe = clamp01((cWE.getTime() - pOrigWS.getTime()) / pOrigDur);
+    const rnd = (ms) => Math.round(ms / roundMs) * roundMs;
+    let ns = rnd(pNewWS.getTime() + fs * pNewDur);
+    let ne = rnd(pNewWS.getTime() + fe * pNewDur);
+    const pS = pNewWS.getTime();
+    const pE = pNewWE.getTime();
+    const minChild = Math.min(roundMs, pNewDur);
+    ns = Math.max(pS, Math.min(pE, ns));
+    ne = Math.max(pS, Math.min(pE, ne));
+    if (ne - ns < minChild) {
+        ne = Math.min(pE, ns + minChild);
+        ns = Math.max(pS, ne - minChild);
+    }
+    return { workStart: new Date(ns), workEnd: new Date(ne) };
+}
+
 export class GanntLTAction extends Component {
     static template = "gannt_lt.GanntLTView";
     static components = { Layout, SearchBar, CogMenu };
@@ -358,6 +918,7 @@ export class GanntLTAction extends Component {
         this.orm = useService("orm");
         this.actionService = useService("action");
         this.notification = useService("notification");
+        this.dialogService = useService("dialog");
         this.root = useRef("root");
         this.ganttElement = useRef("ganttElement");
 
@@ -383,17 +944,24 @@ export class GanntLTAction extends Component {
             }
         }
 
+        // Only restore saved state when returning from a form dialog opened inside GanntLT;
+        // Upon reloading Odoo or newly entering Projects, always start at 40% scale with all items collapsed (Suskleisti).
         let savedState = null;
         try {
             const raw = sessionStorage.getItem(TIMELINE_VIEW_STATE_KEY);
             if (raw) {
-                savedState = JSON.parse(raw);
+                const parsed = JSON.parse(raw);
+                sessionStorage.removeItem(TIMELINE_VIEW_STATE_KEY);
+                if (parsed && parsed.fromFormNavigation) {
+                    savedState = parsed;
+                }
             }
         } catch {}
 
-        let initialZoom = 100;
-        if (savedState && typeof savedState.zoomLevel === "number" && ZOOM_STEPS.includes(savedState.zoomLevel)) {
-            initialZoom = savedState.zoomLevel;
+        let initialZoom = DEFAULT_OVERVIEW_ZOOM;
+        if (savedState && typeof savedState.zoomLevel === "number") {
+            const snapped = Math.max(0, Math.min(100, Math.round(savedState.zoomLevel / 5) * 5));
+            initialZoom = snapped;
         }
 
         let initialProjId = defaultProjId;
@@ -409,27 +977,88 @@ export class GanntLTAction extends Component {
             projects: [],
             undoCount: 0,
             canEdit: true,
+            showWorkHoursDropdown: false,
+            workingHours: this.loadWorkingHoursSchedule(),
         });
 
         this.undoStack = [];
         this._pendingUndoAction = null;
         this.gantt = null;
+        window.__timeline_action = this;
         this.eventIds = [];
         this.onGridClickHandler = null;
         this._initialScrollDone = false;
         this._isExpandingRange = false;
         this._saveViewStateTimer = null;
+        this._zoomAnchorDate = null;
+        this._zoomAnchorOffset = null;
+        this._zoomResetTimer = null;
+        this._currentHoveredTaskId = null;
+        this._hoverActiveElements = [];
+        this._verticalHighlightEl = null;
+        this._verticalScaleHighlightEl = null;
+        this.onMouseMoveHandler = null;
+        this.onMouseLeaveHandler = null;
+        this._resizeTimer = null;
 
         this.onKeyDown = (e) => {
-            if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable)) {
+            if ((e.key === "Escape" || e.key === "Esc") && this.state.showWorkHoursDropdown) {
+                this.closeWorkHoursDropdown();
+                return;
+            }
+            if (
+                e.target &&
+                (e.target.tagName === "INPUT" ||
+                    e.target.tagName === "TEXTAREA" ||
+                    e.target.tagName === "SELECT" ||
+                    e.target.isContentEditable)
+            ) {
+                return;
+            }
+            if (document.querySelector(".modal.show, .o_dialog")) {
                 return;
             }
             if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
                 e.preventDefault();
                 this.undoAction();
+                return;
+            }
+            // Keyboard + and - keys to zoom in and out smoothly while keeping current timeline center
+            const isZoomInKey = (
+                e.key === "+" ||
+                e.key === "=" ||
+                e.code === "Equal" ||
+                e.code === "NumpadAdd"
+            );
+            const isZoomOutKey = (
+                e.key === "-" ||
+                e.key === "_" ||
+                e.code === "Minus" ||
+                e.code === "NumpadSubtract"
+            );
+            if (isZoomInKey || isZoomOutKey) {
+                e.preventDefault();
+                if (isZoomInKey) {
+                    this.zoomIn();
+                } else {
+                    this.zoomOut();
+                }
             }
         };
+        this.onWindowResize = () => {
+            if (this._resizeTimer) clearTimeout(this._resizeTimer);
+            this._resizeTimer = setTimeout(() => {
+                this._resizeTimer = null;
+                if (this.gantt && this.ganttElement && this.ganttElement.el) {
+                    this.applyScaleConfig();
+                    this.gantt.render();
+                    this.renderTodayMarker();
+                }
+            }, 100);
+        };
+        window.addEventListener("resize", this.onWindowResize);
         window.addEventListener("keydown", this.onKeyDown);
+        document.addEventListener("keydown", this.onKeyDown);
 
         onMounted(async () => {
             await this.initGantt();
@@ -443,7 +1072,14 @@ export class GanntLTAction extends Component {
         });
 
         onWillUnmount(() => {
-            this.saveViewState();
+            if (this.onWindowResize) {
+                window.removeEventListener("resize", this.onWindowResize);
+                this.onWindowResize = null;
+            }
+            if (this._resizeTimer) {
+                clearTimeout(this._resizeTimer);
+                this._resizeTimer = null;
+            }
             if (this._saveViewStateTimer) {
                 clearTimeout(this._saveViewStateTimer);
                 this._saveViewStateTimer = null;
@@ -452,8 +1088,13 @@ export class GanntLTAction extends Component {
                 clearTimeout(this._sidebarClickTimer);
                 this._sidebarClickTimer = null;
             }
+            if (this._zoomResetTimer) {
+                clearTimeout(this._zoomResetTimer);
+                this._zoomResetTimer = null;
+            }
             if (this.onKeyDown) {
                 window.removeEventListener("keydown", this.onKeyDown);
+                document.removeEventListener("keydown", this.onKeyDown);
                 this.onKeyDown = null;
             }
             this.hideSnapGuide();
@@ -473,6 +1114,15 @@ export class GanntLTAction extends Component {
                 clearTimeout(this._wheelResetTimer);
                 this._wheelResetTimer = null;
             }
+            if (this.onMouseMoveHandler && this.ganttElement.el) {
+                this.ganttElement.el.removeEventListener("mousemove", this.onMouseMoveHandler);
+                this.onMouseMoveHandler = null;
+            }
+            if (this.onMouseLeaveHandler && this.ganttElement.el) {
+                this.ganttElement.el.removeEventListener("mouseleave", this.onMouseLeaveHandler);
+                this.onMouseLeaveHandler = null;
+            }
+            this.clearHoverHighlight();
             if (this.gantt) {
                 if (this.eventIds && this.eventIds.length) {
                     for (const id of this.eventIds) {
@@ -495,6 +1145,109 @@ export class GanntLTAction extends Component {
         return this.state.canEdit && (this.state.undoCount || 0) > 0;
     }
 
+    get workDaysList() {
+        const order = [1, 2, 3, 4, 5, 6, 0];
+        if (!this.state.workingHours) return [];
+        return order.map((idx) => this.state.workingHours[idx]).filter(Boolean);
+    }
+
+    toggleWorkHoursDropdown() {
+        this.state.showWorkHoursDropdown = !this.state.showWorkHoursDropdown;
+    }
+
+    closeWorkHoursDropdown() {
+        this.state.workingHours = this.loadWorkingHoursSchedule();
+        this.state.showWorkHoursDropdown = false;
+    }
+
+    onPopoverClick(ev) {
+        if (ev && typeof ev.stopPropagation === "function") {
+            ev.stopPropagation();
+        }
+    }
+
+    onTimeInputBlur(day, field, ev) {
+        if (!day || !field) return;
+        const inputVal = ev && ev.target ? ev.target.value : day[field];
+        const defVal = (field === "lunchStart" ? "12:45" : (field === "lunchEnd" ? "13:45" : (field === "end" ? "17:00" : "08:00")));
+        const normalized = normalizeTimeInput(inputVal, defVal);
+        day[field] = normalized;
+        if (ev && ev.target) {
+            ev.target.value = normalized;
+        }
+    }
+
+    applyWorkHoursToWeekdays() {
+        const mon = this.state.workingHours[1];
+        if (!mon) return;
+        for (const idx of [2, 3, 4, 5]) {
+            if (this.state.workingHours[idx]) {
+                this.state.workingHours[idx].active = mon.active;
+                this.state.workingHours[idx].start = mon.start;
+                this.state.workingHours[idx].lunchStart = mon.lunchStart;
+                this.state.workingHours[idx].lunchEnd = mon.lunchEnd;
+                this.state.workingHours[idx].end = mon.end;
+            }
+        }
+    }
+
+    resetDefaultWorkHours() {
+        this.state.workingHours = JSON.parse(JSON.stringify(DEFAULT_WORKING_HOURS));
+    }
+
+    saveWorkHours() {
+        this.saveWorkingHoursSchedule(this.state.workingHours);
+        this.state.showWorkHoursDropdown = false;
+        if (this.gantt) {
+            this.applyScaleConfig();
+            this.gantt.render();
+        }
+        if (this.notification) {
+            this.notification.add("Darbo valandų grafikas sėkmingai išsaugotas.", {
+                type: "success",
+            });
+        }
+    }
+
+    loadWorkingHoursSchedule() {
+        try {
+            if (typeof window !== "undefined" && window.localStorage) {
+                const saved = window.localStorage.getItem(STORAGE_KEY_WORK_HOURS);
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (parsed && typeof parsed === "object") {
+                        const merged = {};
+                        for (let i = 0; i <= 6; i++) {
+                            merged[i] = Object.assign({}, DEFAULT_WORKING_HOURS[i], parsed[i] || {});
+                        }
+                        return merged;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Failed to load working hours schedule:", e);
+        }
+        return JSON.parse(JSON.stringify(DEFAULT_WORKING_HOURS));
+    }
+
+    saveWorkingHoursSchedule(sched) {
+        try {
+            if (typeof window !== "undefined" && window.localStorage) {
+                window.localStorage.setItem(STORAGE_KEY_WORK_HOURS, JSON.stringify(sched));
+            }
+        } catch (e) {
+            console.warn("Failed to save working hours schedule:", e);
+        }
+    }
+
+    isWorkingDateTime(date, stepMinutes = 0) {
+        return isWorkingDateTime(date, this.state.workingHours, stepMinutes);
+    }
+
+    isWorkingDay(date) {
+        return isWorkingDay(date, this.state.workingHours);
+    }
+
     get display() {
         return {
             controlPanel: {},
@@ -503,10 +1256,10 @@ export class GanntLTAction extends Component {
     }
 
     /**
-     * Save current timeline viewport (zoom level, project filter, center date, and scroll positions)
-     * into sessionStorage so that navigating to form views and returning restores exact viewport.
+     * Save current timeline viewport (zoom level, project filter, center date, scroll positions, and open states)
+     * into sessionStorage when opening a form view so returning restores exact viewport.
      */
-    saveViewState() {
+    saveViewState(fromFormNavigation = false) {
         if (!this.gantt) return;
         try {
             const scroll = this.gantt.getScrollState ? this.gantt.getScrollState() : { x: 0, y: 0 };
@@ -519,12 +1272,20 @@ export class GanntLTAction extends Component {
                     centerDate = d.getTime();
                 }
             }
+            const openStates = {};
+            if (this.gantt.eachTask) {
+                this.gantt.eachTask((t) => {
+                    openStates[t.id] = Boolean(t.$open !== undefined ? t.$open : t.open);
+                });
+            }
             const stateObj = {
+                fromFormNavigation: Boolean(fromFormNavigation),
                 zoomLevel: this.state.zoomLevel,
                 selectedProjectId: this.state.selectedProjectId,
                 scrollX: scroll.x,
                 scrollY: scroll.y,
                 centerDate: centerDate,
+                openStates: openStates,
             };
             sessionStorage.setItem(TIMELINE_VIEW_STATE_KEY, JSON.stringify(stateObj));
         } catch {}
@@ -561,6 +1322,205 @@ export class GanntLTAction extends Component {
         const guide = this.ganttElement.el.querySelector(".gantt_magnetic_snap_line");
         if (guide) {
             guide.style.display = "none";
+        }
+    }
+
+    /**
+     * Recursively scales all descendants proportionally when a parent task / milestone / project shrinks.
+     * Operates strictly in work-time using scaleWorkSpanIntoParent, preserving work duration integrity.
+     */
+    _applyScaleDescendants(parentId, pNewWS, pNewWE, pOrigWS, pOrigWE, isRealtime = false) {
+        const g = this.gantt;
+        if (!g) return;
+        const zoomLevel = this.state.zoomLevel;
+        const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+        for (const cid of children) {
+            const ct = g.getTask(cid);
+            if (ct && ct._drag_ws_origin && ct._drag_we_origin) {
+                const scaled = scaleWorkSpanIntoParent(
+                    ct._drag_ws_origin,
+                    ct._drag_we_origin,
+                    pOrigWS,
+                    pOrigWE,
+                    pNewWS,
+                    pNewWE
+                );
+                ct.work_start_date = formatOdooDateTime(scaled.workStart);
+                ct.work_end_date = formatOdooDateTime(scaled.workEnd);
+                const { gridStart, gridEnd } = workDatesToVisualGrid(scaled.workStart, scaled.workEnd, zoomLevel);
+                ct.start_date = gridStart;
+                ct.end_date = gridEnd;
+                if (isRealtime) {
+                    g.refreshTask(cid);
+                } else {
+                    g.updateTask(cid);
+                }
+                this._applyScaleDescendants(cid, scaled.workStart, scaled.workEnd, ct._drag_ws_origin, ct._drag_we_origin, isRealtime);
+            }
+        }
+    }
+
+    /**
+     * Recursively restores all descendants to their pre-drag original dates (when parent is extended or restored).
+     */
+    _restoreDescendants(parentId, isRealtime = false) {
+        const g = this.gantt;
+        if (!g) return;
+        const zoomLevel = this.state.zoomLevel;
+        const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+        for (const cid of children) {
+            const ct = g.getTask(cid);
+            if (ct && ct._drag_ws_origin && ct._drag_we_origin) {
+                ct.work_start_date = formatOdooDateTime(ct._drag_ws_origin);
+                ct.work_end_date = formatOdooDateTime(ct._drag_we_origin);
+                const { gridStart, gridEnd } = workDatesToVisualGrid(ct._drag_ws_origin, ct._drag_we_origin, zoomLevel);
+                ct.start_date = gridStart;
+                ct.end_date = gridEnd;
+                if (isRealtime) {
+                    g.refreshTask(cid);
+                } else {
+                    g.updateTask(cid);
+                }
+                this._restoreDescendants(cid, isRealtime);
+            }
+        }
+    }
+
+    /**
+     * Clears all hover highlight classes and vertical column highlights across both sidebar and timeline
+     */
+    clearHoverHighlight() {
+        this._currentHoveredTaskId = null;
+        if (this._hoverActiveElements && this._hoverActiveElements.length) {
+            for (const el of this._hoverActiveElements) {
+                el.classList.remove("gantt_hover_active", "gantt_hover_child");
+            }
+            this._hoverActiveElements = [];
+        }
+        if (this._verticalHighlightEl) {
+            this._verticalHighlightEl.style.display = "none";
+        }
+        if (this._verticalScaleHighlightEl) {
+            this._verticalScaleHighlightEl.style.display = "none";
+        }
+        if (this.ganttElement && this.ganttElement.el) {
+            const extra = this.ganttElement.el.querySelectorAll(".custom_hover_vertical_highlight, .custom_hover_vertical_scale_highlight");
+            for (const el of extra) {
+                el.style.display = "none";
+            }
+        }
+    }
+
+    /**
+     * Synchronously highlights the hovered parent task and all its expanded children
+     * across both the left sidebar grid and the right timeline data area, as well as
+     * rendering the vertical highlight for the length/span of the hovered task or project.
+     */
+    applyHoverHighlight(taskId) {
+        this.clearHoverHighlight();
+        const g = this.gantt;
+        if (!g || !g.isTaskExists(taskId) || !this.ganttElement || !this.ganttElement.el) return;
+
+        this._currentHoveredTaskId = taskId;
+        const rootEl = this.ganttElement.el;
+
+        // Collect all expanded/visible descendants recursively
+        const childIds = [];
+        const collectExpandedDescendants = (parentId) => {
+            if (!g.isTaskExists(parentId)) return;
+            const parent = g.getTask(parentId);
+            const isOpen = (parent.$open !== false && parent.open !== false);
+            if (!isOpen) return; // If parent is collapsed, children are not expanded/visible
+
+            const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+            for (const childId of children) {
+                childIds.push(childId);
+                collectExpandedDescendants(childId);
+            }
+        };
+        collectExpandedDescendants(taskId);
+
+        const activeEls = [];
+        const markTask = (id, cls) => {
+            const escaped = window.CSS && CSS.escape ? CSS.escape(String(id)) : String(id).replace(/"/g, '\\"');
+            const elements = rootEl.querySelectorAll(`[task_id="${escaped}"], [data-task-id="${escaped}"]`);
+            for (const el of elements) {
+                if (
+                    el.classList.contains("gantt_row") ||
+                    el.classList.contains("gantt_task_row") ||
+                    el.classList.contains("gantt_task_line") ||
+                    el.classList.contains("gantt_bar_task")
+                ) {
+                    el.classList.add(cls);
+                    activeEls.push(el);
+                }
+            }
+        };
+
+        // Highlight hovered parent (or leaf row) horizontally
+        markTask(taskId, "gantt_hover_active");
+
+        // Highlight all expanded children / subtasks horizontally
+        for (const cId of childIds) {
+            markTask(cId, "gantt_hover_child");
+        }
+
+        this._hoverActiveElements = activeEls;
+
+        // Render vertical highlight matching the exact length/span of the hovered task or project on the timeline
+        const escaped = window.CSS && CSS.escape ? CSS.escape(String(taskId)) : String(taskId).replace(/"/g, '\\"');
+        const taskEl = rootEl.querySelector(`.gantt_task_line[task_id="${escaped}"]`);
+        let taskLeft = -1;
+        let taskWidth = 0;
+
+        if (taskEl) {
+            taskLeft = taskEl.offsetLeft;
+            taskWidth = taskEl.offsetWidth;
+        } else {
+            const task = g.getTask(taskId);
+            if (task && task.start_date && task.end_date) {
+                try {
+                    const sPx = this.safePosFromDate(task.start_date);
+                    const ePx = this.safePosFromDate(task.end_date);
+                    if (sPx >= 0 && ePx >= sPx) {
+                        taskLeft = sPx;
+                        taskWidth = Math.max(4, ePx - sPx);
+                    }
+                } catch {}
+            }
+        }
+
+        if (taskLeft >= 0 && taskWidth > 0) {
+            const dataArea = rootEl.querySelector(".gantt_data_area");
+            if (dataArea) {
+                let vHighlight = dataArea.querySelector(".custom_hover_vertical_highlight");
+                if (!vHighlight) {
+                    vHighlight = document.createElement("div");
+                    vHighlight.className = "custom_hover_vertical_highlight";
+                    dataArea.appendChild(vHighlight);
+                }
+                const totalHeight = Math.max(dataArea.offsetHeight, dataArea.scrollHeight);
+                vHighlight.style.left = `${taskLeft}px`;
+                vHighlight.style.width = `${taskWidth}px`;
+                vHighlight.style.height = `${totalHeight}px`;
+                vHighlight.style.display = "block";
+                this._verticalHighlightEl = vHighlight;
+            }
+
+            const scaleArea = rootEl.querySelector(".gantt_task_scale");
+            if (scaleArea) {
+                let vScaleHighlight = scaleArea.querySelector(".custom_hover_vertical_scale_highlight");
+                if (!vScaleHighlight) {
+                    vScaleHighlight = document.createElement("div");
+                    vScaleHighlight.className = "custom_hover_vertical_scale_highlight";
+                    scaleArea.appendChild(vScaleHighlight);
+                }
+                vScaleHighlight.style.left = `${taskLeft}px`;
+                vScaleHighlight.style.width = `${taskWidth}px`;
+                vScaleHighlight.style.height = "100%";
+                vScaleHighlight.style.display = "block";
+                this._verticalScaleHighlightEl = vScaleHighlight;
+            }
         }
     }
 
@@ -603,7 +1563,7 @@ export class GanntLTAction extends Component {
         g.config.grid_resize = true;
         g.config.grid_width = 440;
         g.config.start_on_monday = true;
-        g.config.open_tree_init = true;
+        g.config.open_tree_init = false;
         g.config.fit_tasks = false;
         g.config.autoscroll = true;
         g.config.autoscroll_speed = 30;
@@ -611,13 +1571,20 @@ export class GanntLTAction extends Component {
         g.config.drag_progress = false;
         g.config.drag_resize = true;
         g.config.drag_move = true;
+        g.config.drag_project = true;
         g.config.order_branch = false;
         g.config.order_branch_free = false;
-        g.config.round_dnd_dates = true;
+        g.config.round_dnd_dates = false;
         g.config.readonly = false;
         g.config.tooltip_timeout = 250;
         g.config.tooltip_hide_timeout = 30;
+        g.config.duration_unit = "minute";
+        g.config.duration_step = 1;
+        g.config.min_duration = 60 * 1000; // 1 minute
         g.config.show_errors = false;
+
+        // Ensure parent tasks with children are treated as resizable tasks rather than un-resizable summary tasks
+        g.isSummaryTask = () => false;
 
         // Columns in Left Tree Grid (Only Task and Assignee columns)
         g.config.columns = [
@@ -653,6 +1620,8 @@ export class GanntLTAction extends Component {
                             : "fa fa-flag text-primary";
                         return `<i class="${icon} me-1"></i><b>${task.text}</b>`;
                     }
+                    const isSubtask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+                    const subtaskBadge = isSubtask ? `<span class="subtask_tree_elbow text-muted me-1" title="${_t("Po-užduotis")}">↳</span>` : "";
                     const isLocked = task.is_locked || task.state === "locked";
                     const icon = isLocked
                         ? "fa fa-lock text-warning"
@@ -668,7 +1637,7 @@ export class GanntLTAction extends Component {
                                             ? "fa fa-clock-o text-secondary"
                                             : "fa fa-tasks text-muted")))));
                     const titleAttr = isLocked ? ` title="${_t("Užrakinta užduotis (laukiama kitų užduočių)")}"` : "";
-                    return `<i class="${icon} me-1"${titleAttr}></i>${task.text}`;
+                    return `${subtaskBadge}<i class="${icon} me-1"${titleAttr}></i>${task.text}`;
                 },
             },
             {
@@ -689,8 +1658,66 @@ export class GanntLTAction extends Component {
             },
         ];
 
+        // Ensure quarter scale methods are explicitly defined on gantt.date
+        if (g.date) {
+            g.date.quarter_start = (date) => {
+                const a = g.date.month_start(date);
+                const s = a.getMonth();
+                const r = s >= 9 ? 9 : s >= 6 ? 6 : s >= 3 ? 3 : 0;
+                a.setMonth(r);
+                return a;
+            };
+            g.date.add_quarter = (date, inc) => {
+                return g.date.add(date, inc * 3, "month");
+            };
+        }
+
         // Set default scale (Zoom-driven)
         this.applyScaleConfig();
+
+        // Tree grid hierarchy connector lines (IDE-like vertical lines & elbows)
+        let currentIndentTaskId = null;
+        let indentStep = 0;
+        let cachedAncestors = [];
+
+        g.templates.grid_indent = (task) => {
+            if (!task) return `<div class="gantt_tree_indent"></div>`;
+            const level = task.$level || 0;
+            if (task.id !== currentIndentTaskId || indentStep >= level) {
+                currentIndentTaskId = task.id;
+                indentStep = 0;
+                cachedAncestors = [];
+                let cur = task;
+                while (cur && cur.parent && cur.parent !== 0 && cur.parent !== "0") {
+                    cachedAncestors.unshift(cur.id);
+                    cur = (typeof g.isTaskExists === "function" && g.isTaskExists(cur.parent)) ? g.getTask(cur.parent) : null;
+                }
+            }
+
+            const i = indentStep++;
+            if (i >= cachedAncestors.length) {
+                return `<div class="gantt_tree_indent"></div>`;
+            }
+
+            const ancId = cachedAncestors[i];
+            const ancTask = (typeof g.isTaskExists === "function" && g.isTaskExists(ancId)) ? g.getTask(ancId) : null;
+            if (!ancTask) {
+                return `<div class="gantt_tree_indent"></div>`;
+            }
+
+            const siblings = (typeof g.getChildren === "function" ? g.getChildren(ancTask.parent) : []) || [];
+            const isLast = siblings.length > 0 && (String(siblings[siblings.length - 1]) === String(ancId));
+            const isSelf = (i === cachedAncestors.length - 1);
+
+            let cls = "gantt_tree_indent";
+            if (isSelf) {
+                cls += isLast ? " gantt_tree_elbow_bottom" : " gantt_tree_elbow_tee";
+            } else {
+                cls += isLast ? " gantt_tree_line_blank" : " gantt_tree_line_through";
+            }
+
+            return `<div class="${cls}"></div>`;
+        };
 
         // Rich Tooltip (Translated to Lithuanian)
         g.templates.tooltip_date_format = (date) => {
@@ -717,39 +1744,53 @@ export class GanntLTAction extends Component {
             const isItemLocked = task.is_locked || task.state === "locked";
             const percent = isItemLocked ? 0 : Math.round((task.progress || 0) * 100);
             const { workDays, workHours, calendarDays } = calculateWorkingDaysAndHours(effStart, effEnd);
-            const durationDisplay = calendarDays || task.duration || 1;
+            // Durations are always shown in minutes / hours / days (never "0.1h"); minutes are rounded UP, min 1.
+            const spanMin = Math.max(1, Math.ceil((effEnd.getTime() - effStart.getTime()) / 60000));
+            const durationText = formatDurationMinutes(spanMin);
+            const workText = workHours > 0 ? formatDurationMinutes(Math.round(workHours * 60)) : "0 min";
+            const timerSec = Number(task.timer_total_seconds) || 0;
+            const timerRowHtml = timerSec > 0
+                ? `<div class="tooltip_row"><span class="tooltip_label">Laikmatis:</span> <span class="tooltip_val">${formatDurationMinutes(Math.ceil(timerSec / 60))}</span></div>`
+                : "";
 
             let deadlineHtml = "";
             let dlDate = null;
-            if (task.date_deadline || task.has_deadline) {
-                const dlRaw = task.date_deadline || task.deadline;
-                if (dlRaw) {
-                    dlDate = new Date(String(dlRaw).replace(/-/g, "/"));
-                    if (!isNaN(dlDate.getTime())) {
-                        const dlFormatted = g.templates.tooltip_date_format(dlDate);
-                        deadlineHtml += `<div class="tooltip_row tooltip_deadline_row"><span class="tooltip_label">Terminas:</span> <span class="tooltip_val">${dlFormatted}</span></div>`;
-                    } else {
-                        dlDate = null;
-                    }
+            if (task.has_deadline_delay && task.deadline_end) {
+                // Red tail: planned end -> deadline (or live "now" for a running timer)
+                dlDate = task.deadline_end instanceof Date ? task.deadline_end : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                if (isNaN(dlDate.getTime())) dlDate = null;
+                if (dlDate) {
+                    const dlFormatted = g.templates.tooltip_date_format(dlDate);
+                    const dlLabel = task.delay_kind === "timer" ? "Dabar (laikmatis veikia):" : "Terminas / faktinė pabaiga:";
+                    deadlineHtml += `<div class="tooltip_row tooltip_deadline_row"><span class="tooltip_label">${dlLabel}</span> <span class="tooltip_val">${dlFormatted}</span></div>`;
+                }
+            } else if (task.date_deadline) {
+                const d = new Date(String(task.date_deadline).replace(/-/g, "/"));
+                if (!isNaN(d.getTime())) {
+                    dlDate = d;
+                    deadlineHtml += `<div class="tooltip_row tooltip_deadline_row"><span class="tooltip_label">Terminas:</span> <span class="tooltip_val">${g.templates.tooltip_date_format(d)}</span></div>`;
                 }
             }
             if (task.has_deadline_delay) {
-                const delayDays = task.delay_days || 0;
-                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimas:</span> <span class="tooltip_val text-danger fw-bold">+${delayDays} d. (pratęstas)</span></div>`;
+                let delayMin = Number(task.delay_minutes) || 0;
+                if (!delayMin && dlDate && effEnd && dlDate > effEnd) {
+                    delayMin = Math.max(1, Math.ceil((dlDate.getTime() - effEnd.getTime()) / 60000));
+                }
+                const delayStr = delayMin > 0 ? `+${formatDurationMinutes(delayMin)}` : "+!";
+                const liveTag = task.delay_kind === "timer" ? " (vyksta)" : "";
+                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimas:</span> <span class="tooltip_val text-danger fw-bold">${delayStr}${liveTag}</span></div>`;
 
-                // Calculate actual working days and working hours in the delayed window (excluding weekends & holidays)
+                // Working days / hours inside the late window (planned end -> deadline), excluding weekends & holidays
                 let delayWorkDays = 0;
                 let delayWorkHours = 0;
                 if (effEnd && dlDate && dlDate > effEnd) {
-                    const delayStart = new Date(effEnd.getFullYear(), effEnd.getMonth(), effEnd.getDate() + 1, 8, 0, 0);
-                    const delayCalc = calculateWorkingDaysAndHours(delayStart, dlDate);
+                    const delayCalc = calculateWorkingDaysAndHours(effEnd, dlDate);
                     delayWorkDays = delayCalc.workDays;
                     delayWorkHours = delayCalc.workHours;
                 }
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. dienos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkDays} d.</span></div>`;
-                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours} val.</span></div>`;
+                deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours > 0 ? formatDurationMinutes(Math.round(delayWorkHours * 60)) : "0 min"}</span></div>`;
             }
-
             const getStatusBadge = (t) => {
                 if (t.is_project) {
                     const pStatus = t.last_update_status || "";
@@ -821,9 +1862,9 @@ export class GanntLTAction extends Component {
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
                         ${deadlineHtml}
-                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationText}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workText}</b></span></div>
                         ${task.task_count !== undefined ? `<div class="tooltip_row"><span class="tooltip_label">Užduotys:</span> <span class="tooltip_val">${task.done_task_count || 0} / ${task.task_count}</span></div>` : ""}
                         <div class="tooltip_progress_bar">
                             <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
@@ -843,9 +1884,9 @@ export class GanntLTAction extends Component {
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
                         ${deadlineHtml}
-                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationText}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workText}</b></span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Atsakingas:</span> <span class="tooltip_val">${task.assignees || "-"}</span></div>
                         ${task.allocated_hours ? `<div class="tooltip_row"><span class="tooltip_label">Planuotos val.:</span> <span class="tooltip_val">${task.allocated_hours}</span></div>` : ""}
                         <div class="tooltip_progress_bar">
@@ -879,10 +1920,11 @@ export class GanntLTAction extends Component {
                         <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
                         ${deadlineHtml}
-                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationDisplay} d.</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Trukmė:</span> <span class="tooltip_val">${durationText}</span></div>
                         <div class="tooltip_row"><span class="tooltip_label">Darbo dienos:</span> <span class="tooltip_val"><b>${workDays} d.</b></span></div>
-                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workHours} val.</b></span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Darbo valandos:</span> <span class="tooltip_val"><b>${workText}</b></span></div>
                         ${task.allocated_hours ? `<div class="tooltip_row"><span class="tooltip_label">Planuotos val.:</span> <span class="tooltip_val">${task.allocated_hours}</span></div>` : ""}
+                        ${timerRowHtml}
                     ` : `
                         <div class="tooltip_row"><span class="tooltip_label">Terminas:</span> <span class="tooltip_val text-muted">Nenurodytas (1 d. vaizdas)</span></div>
                     `}
@@ -917,33 +1959,36 @@ export class GanntLTAction extends Component {
                 statusIcon = `<i class="fa fa-clock-o me-1"></i>`;
             }
 
+            // Red tail: drawn right AFTER the bar, from the planned end up to the deadline (or live "now" for a running timer).
             let delayBarHtml = "";
-            if (task.has_deadline_delay && task.deadline_end) {
-                const dlEnd = task.deadline_end instanceof Date
-                    ? task.deadline_end
-                    : new Date(String(task.deadline_end).replace(/-/g, "/"));
-                if (!isNaN(dlEnd.getTime())) {
-                    let widthPx = 0;
-                    try {
-                        const sPx = (typeof g.posFromDate === "function") ? g.posFromDate(end || task.end_date) : -1;
-                        const ePx = (typeof g.posFromDate === "function") ? g.posFromDate(dlEnd) : -1;
-                        if (sPx >= 0 && ePx > sPx) {
-                            widthPx = Math.round(ePx - sPx);
-                        }
-                    } catch {
-                        widthPx = 0;
+            if (task.has_deadline_delay) {
+                let diffMin = Number(task.delay_minutes) || 0;
+                if (!diffMin && task.deadline_end) {
+                    const dlEnd = task.deadline_end instanceof Date
+                        ? task.deadline_end
+                        : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                    const realWorkEnd = parseWorkDateStr(task.work_end_date) || (end || task.end_date);
+                    if (!isNaN(dlEnd.getTime()) && realWorkEnd && dlEnd.getTime() > realWorkEnd.getTime()) {
+                        diffMin = Math.max(1, Math.ceil((dlEnd.getTime() - realWorkEnd.getTime()) / 60000));
                     }
-                    if (!widthPx || widthPx <= 0) {
-                        const eDate = (end || task.end_date) instanceof Date ? (end || task.end_date) : new Date(String(end || task.end_date).replace(/-/g, "/"));
-                        const diffDays = Math.max(1, Math.round((dlEnd.getTime() - eDate.getTime()) / 86400000));
+                }
+
+                if (diffMin > 0) {
+                    const diffMs = diffMin * 60000;
+                    let widthPx = 0;
+                    if (isExactTimeResolution(this.state.zoomLevel)) {
+                        const pxPerHour = (ZOOM_PX_PER_DAY[this.state.zoomLevel] || 1200) / 24.0;
+                        widthPx = Math.max(16, Math.round((diffMs / 3600000.0) * pxPerHour));
+                    } else {
+                        const diffDays = Math.max(0.2, diffMs / 86400000.0);
                         const pxPerDay = ZOOM_PX_PER_DAY[this.state.zoomLevel] || 32;
-                        widthPx = Math.round(diffDays * pxPerDay);
+                        widthPx = Math.max(16, Math.round(diffDays * pxPerDay));
                     }
 
-                    const delayDays = task.delay_days || 0;
-                    const badgeText = widthPx >= 28
-                        ? `<i class="fa fa-clock-o me-1"></i>+${delayDays} d.`
-                        : (widthPx >= 14 ? `+${delayDays}` : "");
+                    const delayText = `+${formatDurationMinutes(diffMin)}`;
+                    const badgeText = widthPx >= 38
+                        ? `<i class="fa fa-clock-o me-1"></i>${delayText}`
+                        : (widthPx >= 18 ? delayText : "");
                     delayBarHtml = `
                         <div class="timeline_deadline_delay_bar" style="position: absolute; left: 100%; top: -1px; width: ${widthPx}px; height: calc(100% + 2px);">
                             <span class="deadline_badge">${badgeText}</span>
@@ -951,8 +1996,44 @@ export class GanntLTAction extends Component {
                     `;
                 }
             }
+            const getBarWidthPx = (sInput, eInput) => {
+                let w = 100;
+                try {
+                    const sPx = this.safePosFromDate(sInput);
+                    const ePx = this.safePosFromDate(eInput);
+                    if (sPx >= 0 && ePx >= sPx) {
+                        w = Math.max(4, Math.round(ePx - sPx));
+                    } else {
+                        const sD = sInput instanceof Date ? sInput : new Date(sInput);
+                        const eD = eInput instanceof Date ? eInput : new Date(eInput);
+                        const durDays = Math.max(0.05, (eD.getTime() - sD.getTime()) / 86400000);
+                        const pxPerDay = ZOOM_PX_PER_DAY[this.state.zoomLevel] || 32;
+                        w = Math.max(4, Math.round(durDays * pxPerDay));
+                    }
+                } catch {
+                    w = 100;
+                }
+                return w;
+            };
 
-            const hoursBadge = task.allocated_hours ? ` <span class="bar_hours_badge">(${task.allocated_hours})</span>` : "";
+            const barWidthPx = getBarWidthPx(start || task.start_date, end || task.end_date);
+            const hoursBadge = (task.allocated_hours && barWidthPx >= 110) ? ` <span class="bar_hours_badge">(${task.allocated_hours})</span>` : "";
+
+            if (barWidthPx < 24) {
+                return `
+                    <span class="bar_content_wrapper bar_content_empty"></span>
+                    ${delayBarHtml}
+                `;
+            }
+
+            if (barWidthPx < 56) {
+                return `
+                    <span class="bar_content_wrapper">
+                        <span class="bar_text">${statusIcon}${task.text}</span>
+                    </span>
+                    ${delayBarHtml}
+                `;
+            }
 
             return `
                 <span class="bar_content_wrapper">
@@ -963,9 +2044,26 @@ export class GanntLTAction extends Component {
             `;
         };
 
-        // Task Bar Styling Template (Applies status classes)
+        // Task Bar Styling Template (Applies status classes and adaptive width classes)
         g.templates.task_class = (start, end, task) => {
-            const extraClass = task.has_deadline_delay ? " has_deadline_delay" : "";
+            let barWidthPx = 100;
+            try {
+                const sPx = this.safePosFromDate(start || task.start_date);
+                const ePx = this.safePosFromDate(end || task.end_date);
+                if (sPx >= 0 && ePx >= sPx) {
+                    barWidthPx = Math.max(4, Math.round(ePx - sPx));
+                } else {
+                    const sD = (start || task.start_date) instanceof Date ? (start || task.start_date) : new Date(start || task.start_date);
+                    const eD = (end || task.end_date) instanceof Date ? (end || task.end_date) : new Date(end || task.end_date);
+                    const durDays = Math.max(0.05, (eD.getTime() - sD.getTime()) / 86400000);
+                    const pxPerDay = ZOOM_PX_PER_DAY[this.state.zoomLevel] || 32;
+                    barWidthPx = Math.max(4, Math.round(durDays * pxPerDay));
+                }
+            } catch {
+                barWidthPx = 100;
+            }
+            const sizeClass = barWidthPx < 24 ? " bar_ultra_compact" : (barWidthPx < 56 ? " bar_compact" : "");
+            const extraClass = (task.has_deadline_delay ? " has_deadline_delay" : "") + sizeClass;
             const state = task.state || (task.is_done ? "1_done" : "01_in_progress");
 
             if (task.is_project) {
@@ -1017,7 +2115,7 @@ export class GanntLTAction extends Component {
             return tClass + extraClass;
         };
 
-        // Mark Today, Weekends, Lithuanian National Holidays, and Work Hours in Timeline Background Cells
+        // Mark Today, Weekends, Lithuanian National Holidays, Work Hours, and Full-Height Boundary Lines in Timeline Background Cells
         g.templates.timeline_cell_class = (task, date) => {
             const today = new Date();
             const d = new Date(date);
@@ -1027,51 +2125,87 @@ export class GanntLTAction extends Component {
                 d.getDate() === today.getDate()
             );
             const hol = getLithuanianHoliday(d);
-            const wknd = isWeekend(d);
+            const isWorkDay = this.isWorkingDay(d);
 
-            if (this.state.zoomLevel >= 300) {
+            const scales = g.config.scales || [];
+            const baseScale = scales.length > 0 ? scales[scales.length - 1] : null;
+            const baseUnit = baseScale ? baseScale.unit : "day";
+
+            if (baseUnit === "minute") {
                 const hour = d.getHours();
-                const isWorkHour = (hour >= 8 && hour <= 17 && !hol && !wknd);
+                const isWorkHour = this.isWorkingDateTime(d, baseScale.step || 15);
                 const classes = [];
                 if (isToday) classes.push("today_cell today_hour_cell");
                 if (hol) classes.push("holiday_cell");
-                else if (wknd) classes.push("weekend_cell");
+                else if (!isWorkDay) classes.push("weekend_cell");
                 else if (!isWorkHour) classes.push("off_hours_cell");
                 else classes.push("work_hours_cell");
+
+                if (d.getMinutes() === 0) {
+                    classes.push("hour_start_grid_cell");
+                }
+                if (hour === 0 && d.getMinutes() === 0) {
+                    if (d.getMonth() === 0 && d.getDate() === 1) classes.push("year_start_grid_cell");
+                    else if (d.getDate() === 1 && (d.getMonth() % 3 === 0)) classes.push("quarter_start_grid_cell");
+                    else if (d.getDate() === 1) classes.push("month_start_grid_cell");
+                    else classes.push("day_start_grid_cell");
+                }
                 return classes.join(" ");
             }
 
-            const isMacroTimeline = this.state.zoomLevel < 65;
-            if (isMacroTimeline) {
-                // In quarter, month or week zoom mode, check if today is inside this cell interval
-                if (this.state.zoomLevel <= 15) {
-                    const qD = Math.floor(d.getMonth() / 3);
-                    const qToday = Math.floor(today.getMonth() / 3);
-                    if (d.getFullYear() === today.getFullYear() && qD === qToday) {
-                        return "today_cell";
-                    }
-                } else if (this.state.zoomLevel < 35) {
-                    if (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth()) {
-                        return "today_cell";
-                    }
-                } else {
-                    const endWeek = new Date(d.getTime() + 7 * 86400000);
-                    if (today >= d && today < endWeek) {
-                        return "today_cell";
-                    }
+            if (baseUnit === "hour") {
+                const hour = d.getHours();
+                const isWorkHour = this.isWorkingDateTime(d, baseScale.step ? baseScale.step * 60 : 60);
+                const classes = [];
+                if (isToday) classes.push("today_cell today_hour_cell");
+                if (hol) classes.push("holiday_cell");
+                else if (!isWorkDay) classes.push("weekend_cell");
+                else if (!isWorkHour) classes.push("off_hours_cell");
+                else classes.push("work_hours_cell");
+
+                classes.push("hour_start_grid_cell");
+                if (hour === 0) {
+                    if (d.getMonth() === 0 && d.getDate() === 1) classes.push("year_start_grid_cell");
+                    else if (d.getDate() === 1 && (d.getMonth() % 3 === 0)) classes.push("quarter_start_grid_cell");
+                    else if (d.getDate() === 1) classes.push("month_start_grid_cell");
+                    else classes.push("day_start_grid_cell");
                 }
-                return "";
+                return classes.join(" ");
             }
 
+            if (baseUnit === "week") {
+                // Weekly view (15% - 25%): align boundary lines to Thursday of ISO week
+                const thu = new Date(d.getTime() + (3 - ((d.getDay() + 6) % 7)) * 86400000);
+                const classes = [];
+                if (thu.getMonth() === 0 && getISOWeekNumber(thu) === 1) classes.push("year_start_grid_cell");
+                else if (thu.getMonth() % 3 === 0 && thu.getDate() <= 7) classes.push("quarter_start_grid_cell");
+                else if (thu.getDate() <= 7) classes.push("month_start_grid_cell");
+                return classes.join(" ");
+            }
+
+            if (baseUnit === "month") {
+                // Macro monthly view (0% - 10%)
+                const isSameMonth = (d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth());
+                const classes = [];
+                if (isSameMonth) classes.push("today_cell");
+                if (d.getMonth() === 0) classes.push("year_start_grid_cell");
+                else if (d.getMonth() % 3 === 0) classes.push("quarter_start_grid_cell");
+                else classes.push("month_start_grid_cell");
+                return classes.join(" ");
+            }
+
+            // Daily view (35% - 55%)
             const classes = [];
-            if (isToday) {
-                classes.push("today_cell");
-            }
+            if (isToday) classes.push("today_cell");
+            if (hol) classes.push("holiday_cell");
+            else if (!isWorkDay) classes.push("weekend_cell");
 
-            if (hol) {
-                classes.push("holiday_cell");
-            } else if (wknd) {
-                classes.push("weekend_cell");
+            if (d.getMonth() === 0 && d.getDate() === 1) {
+                classes.push("year_start_grid_cell");
+            } else if (d.getDate() === 1 && (d.getMonth() % 3 === 0)) {
+                classes.push("quarter_start_grid_cell");
+            } else if (d.getDate() === 1) {
+                classes.push("month_start_grid_cell");
             }
 
             return classes.join(" ");
@@ -1093,16 +2227,16 @@ export class GanntLTAction extends Component {
         this.eventIds.push(g.attachEvent("onGanttRender", () => this.renderTodayMarker()));
         this.eventIds.push(g.attachEvent("onGanttScroll", (oldLeft, oldTop, left, top) => {
             this.hideTooltip();
+            this.clearHoverHighlight();
             this.renderTodayMarker();
 
-            if (!this._isZooming) {
-                if (this._saveViewStateTimer) {
-                    clearTimeout(this._saveViewStateTimer);
+            if (!this._isZooming && oldLeft !== undefined && left !== undefined && oldLeft !== left) {
+                this._zoomAnchorDate = null;
+                this._zoomAnchorOffset = null;
+                if (this._zoomResetTimer) {
+                    clearTimeout(this._zoomResetTimer);
+                    this._zoomResetTimer = null;
                 }
-                this._saveViewStateTimer = setTimeout(() => {
-                    this._saveViewStateTimer = null;
-                    this.saveViewState();
-                }, 150);
             }
 
             // Bidirectional elastic infinite scroll: expand only when user actively scrolls past edge
@@ -1153,7 +2287,7 @@ export class GanntLTAction extends Component {
                     this._sidebarClickTimer = setTimeout(() => {
                         this._sidebarClickTimer = null;
                         this.fitToScreen(id);
-                    }, 250);
+                    }, 60);
                 }
             }
             return true;
@@ -1173,11 +2307,21 @@ export class GanntLTAction extends Component {
         this.eventIds.push(g.attachEvent("onBeforeRowDragMove", () => false));
         this.eventIds.push(g.attachEvent("onRowDrag", () => false));
 
+        this.eventIds.push(g.attachEvent("onTaskOpened", () => {
+            this.clearHoverHighlight();
+            return true;
+        }));
+        this.eventIds.push(g.attachEvent("onTaskClosed", () => {
+            this.clearHoverHighlight();
+            return true;
+        }));
+
         // Cascading Drag-and-Drop: record start/end dates for parent and all descendants
-        this.eventIds.push(g.attachEvent("onBeforeTaskDrag", (id, mode) => {
+        this.eventIds.push(g.attachEvent("onBeforeTaskDrag", (id, mode, e) => {
             if (!this.state.canEdit || mode === "progress") {
                 return false;
             }
+            this.clearHoverHighlight();
             this.hideTooltip();
             const task = g.getTask(id);
             if (!task) return true;
@@ -1185,13 +2329,41 @@ export class GanntLTAction extends Component {
             task._is_dragged = true;
             task._drag_start_origin = new Date(task.start_date);
             task._drag_end_origin = new Date(task.end_date);
+            task._drag_ws_origin = parseWorkDateStr(task.work_start_date) || new Date(task.start_date);
+            task._drag_we_origin = parseWorkDateStr(task.work_end_date) || new Date(task.end_date);
             task._fixed_parent = task.parent;
 
+            // Reliably capture whether the start (left) or end (right) handle is being dragged
+            const state = (g.getState ? g.getState() : {}) || {};
+            let isStart = undefined;
+            if (state.drag_from_start !== undefined) {
+                isStart = Boolean(state.drag_from_start);
+            } else if (e && e.target && e.target.closest) {
+                isStart = Boolean(e.target.closest('.task_left, .task_start_date, [data-bind-property="start_date"]'));
+            }
+            task._drag_from_start = isStart;
+
             // Collect magnetic snap target timestamps from other tasks/milestones/projects
+            // (Exclude current task, its ancestors, and its descendants so subtasks never snap to parent boundaries)
             const snapTimestamps = [];
+            const excludeIds = new Set([id]);
+            let curP = task.parent;
+            while (curP && g.isTaskExists && g.isTaskExists(curP)) {
+                excludeIds.add(curP);
+                curP = g.getTask(curP).parent;
+            }
+            const collectDesc = (pId) => {
+                const kids = (typeof g.getChildren === "function" ? g.getChildren(pId) : []) || [];
+                for (const k of kids) {
+                    excludeIds.add(k);
+                    collectDesc(k);
+                }
+            };
+            collectDesc(id);
+
             if (g.eachTask) {
                 g.eachTask((other) => {
-                    if (other.id === id) return;
+                    if (excludeIds.has(other.id)) return;
                     if (other.start_date) {
                         snapTimestamps.push(new Date(other.start_date).getTime());
                     }
@@ -1222,7 +2394,7 @@ export class GanntLTAction extends Component {
 
             const prevSnapshots = [captureSnapshot(task)];
 
-            if (mode === "move") {
+            if (mode === "move" || mode === "resize") {
                 const storeDescendants = (parentId) => {
                     const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
                     for (const childId of children) {
@@ -1230,12 +2402,20 @@ export class GanntLTAction extends Component {
                         if (childTask) {
                             childTask._drag_start_origin = new Date(childTask.start_date);
                             childTask._drag_end_origin = new Date(childTask.end_date);
+                            childTask._drag_ws_origin = parseWorkDateStr(childTask.work_start_date) || new Date(childTask.start_date);
+                            childTask._drag_we_origin = parseWorkDateStr(childTask.work_end_date) || new Date(childTask.end_date);
                             prevSnapshots.push(captureSnapshot(childTask));
                             storeDescendants(childId);
                         }
                     }
                 };
                 storeDescendants(id);
+
+                let curAnc = task.parent;
+                while (curAnc && g.isTaskExists && g.isTaskExists(curAnc)) {
+                    prevSnapshots.push(captureSnapshot(g.getTask(curAnc)));
+                    curAnc = g.getTask(curAnc).parent;
+                }
             }
 
             this._pendingUndoAction = {
@@ -1247,7 +2427,7 @@ export class GanntLTAction extends Component {
             return true;
         }));
 
-        // Cascading move and magnetic snapping in real-time on the Gantt chart
+        // Real-time grid snapping, tight magnetic snapping to siblings, and cascading updates
         this.eventIds.push(g.attachEvent("onTaskDrag", (id, mode) => {
             this.hideTooltip();
             const task = g.getTask(id);
@@ -1258,19 +2438,27 @@ export class GanntLTAction extends Component {
                 task.parent = task._fixed_parent;
             }
 
-            // Magnetic snap threshold in pixels
-            const SNAP_THRESHOLD_PX = 20;
+            const zoomLevel = this.state.zoomLevel;
+            const isIntraDay = task.is_hourly || isIntraDayWorkSpan(task.work_start_date, task.work_end_date);
+            const minDurMs = getMinGridDurationMs(zoomLevel, isIntraDay);
+            const SNAP_THRESHOLD_PX = 8;
             let snappedGuidePx = null;
 
-            if (this._snapTargetTimestamps && this._snapTargetTimestamps.length > 0 && typeof g.posFromDate === "function") {
-                if (mode === "resize") {
-                    const state = g.getState ? g.getState() : {};
-                    const isStartHandle = state.drag_from_start !== undefined
-                        ? state.drag_from_start
-                        : (task._drag_start_origin && Math.abs(task.start_date.getTime() - task._drag_start_origin.getTime()) > 0);
+            if (mode === "resize") {
+                const state = g.getState ? g.getState() : {};
+                const isStartHandle = (task._drag_from_start !== undefined)
+                    ? task._drag_from_start
+                    : (state.drag_from_start !== undefined
+                        ? Boolean(state.drag_from_start)
+                        : (task._drag_start_origin && Math.abs(task.start_date.getTime() - task._drag_start_origin.getTime()) > 0));
 
-                    if (isStartHandle) {
-                        const currentPx = this.safePosFromDate(task.start_date);
+                if (isStartHandle) {
+                    // Resizing left handle (start): snap to active grid step
+                    let candidateStart = snapDateToGrid(task.start_date, zoomLevel);
+
+                    // Magnetic snapping to nearby tasks (tight 8px threshold)
+                    if (this._snapTargetTimestamps && this._snapTargetTimestamps.length > 0 && typeof g.posFromDate === "function") {
+                        const currentPx = this.safePosFromDate(candidateStart);
                         let bestDiff = Infinity;
                         let bestMs = null;
                         let bestTargetPx = null;
@@ -1288,15 +2476,38 @@ export class GanntLTAction extends Component {
                         }
 
                         if (bestMs !== null && bestMs < task.end_date.getTime()) {
-                            task.start_date = new Date(bestMs);
+                            candidateStart = new Date(bestMs);
                             snappedGuidePx = bestTargetPx;
                             task._magnetically_snapped_start = true;
                         } else {
                             task._magnetically_snapped_start = false;
                         }
-                    } else {
-                        // Resizing end handle
-                        const currentPx = this.safePosFromDate(task.end_date);
+                    }
+
+                    // Enforce minimum duration: subtracting cannot invert or collapse task
+                    if (task.end_date.getTime() - candidateStart.getTime() < minDurMs) {
+                        candidateStart = new Date(task.end_date.getTime() - minDurMs);
+                    }
+
+                    // Ancestor container extension: extending start date expands parent containers in real-time
+                    let curAncId = task.parent;
+                    while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                        const anc = g.getTask(curAncId);
+                        if (anc && anc.start_date && candidateStart < anc.start_date) {
+                            anc.start_date = new Date(candidateStart);
+                            g.refreshTask(curAncId);
+                        }
+                        curAncId = anc.parent;
+                    }
+
+                    task.start_date = candidateStart;
+                } else {
+                    // Resizing right handle (end): snap to active grid step
+                    let candidateEnd = snapDateToGrid(task.end_date, zoomLevel);
+
+                    // Magnetic snapping to nearby tasks (tight 8px threshold)
+                    if (this._snapTargetTimestamps && this._snapTargetTimestamps.length > 0 && typeof g.posFromDate === "function") {
+                        const currentPx = this.safePosFromDate(candidateEnd);
                         let bestDiff = Infinity;
                         let bestMs = null;
                         let bestTargetPx = null;
@@ -1314,7 +2525,7 @@ export class GanntLTAction extends Component {
                         }
 
                         if (bestMs !== null && bestMs > task.start_date.getTime()) {
-                            task.end_date = new Date(bestMs);
+                            candidateEnd = new Date(bestMs);
                             snappedGuidePx = bestTargetPx;
                             task._magnetically_snapped_end = true;
                         } else {
@@ -1322,31 +2533,58 @@ export class GanntLTAction extends Component {
                         }
                     }
 
-                    // Enforce container bounds: milestone or parent task cannot be smaller than its children
-                    const children = (typeof g.getChildren === "function" ? g.getChildren(id) : []) || [];
-                    if (children.length > 0) {
-                        let minChildStart = null;
-                        let maxChildEnd = null;
-                        for (const childId of children) {
-                            const childTask = g.getTask(childId);
-                            if (childTask) {
-                                if (!minChildStart || childTask.start_date < minChildStart) minChildStart = childTask.start_date;
-                                if (!maxChildEnd || childTask.end_date > maxChildEnd) maxChildEnd = childTask.end_date;
-                            }
-                        }
-                        if (minChildStart && task.start_date > minChildStart) {
-                            task.start_date = new Date(minChildStart);
-                        }
-                        if (maxChildEnd && task.end_date < maxChildEnd) {
-                            task.end_date = new Date(maxChildEnd);
-                        }
+                    // Enforce minimum duration: subtracting cannot invert or collapse task
+                    if (candidateEnd.getTime() - task.start_date.getTime() < minDurMs) {
+                        candidateEnd = new Date(task.start_date.getTime() + minDurMs);
                     }
-                } else if (mode === "move") {
-                    const origDurationMs = task._drag_end_origin && task._drag_start_origin
-                        ? (task._drag_end_origin.getTime() - task._drag_start_origin.getTime())
-                        : (task.end_date.getTime() - task.start_date.getTime());
-                    const startPx = this.safePosFromDate(task.start_date);
-                    const endPx = this.safePosFromDate(task.end_date);
+
+                    // Ancestor container extension: extending end date expands parent containers in real-time
+                    let curAncId = task.parent;
+                    while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                        const anc = g.getTask(curAncId);
+                        if (anc && anc.end_date && candidateEnd > anc.end_date) {
+                            anc.end_date = new Date(candidateEnd);
+                            g.refreshTask(curAncId);
+                        }
+                        curAncId = anc.parent;
+                    }
+
+                    task.end_date = candidateEnd;
+                }
+
+                // Proportional descendant scaling on parent shrink (only scale down when shrinking)
+                if (task._drag_ws_origin && task._drag_we_origin) {
+                    const pOrigDur = task._drag_we_origin.getTime() - task._drag_ws_origin.getTime();
+                    const pDates = computeDragWorkDates({
+                        mode: "resize",
+                        isStartHandle,
+                        origWS: task._drag_ws_origin,
+                        origWE: task._drag_we_origin,
+                        origGS: task._drag_start_origin || task.start_date,
+                        origGE: task._drag_end_origin || task.end_date,
+                        rawStart: task.start_date,
+                        rawEnd: task.end_date,
+                        zoomLevel,
+                    });
+                    const pCurDur = pDates.workEnd.getTime() - pDates.workStart.getTime();
+
+                    if (pCurDur < pOrigDur && pOrigDur > 0) {
+                        this._applyScaleDescendants(id, pDates.workStart, pDates.workEnd, task._drag_ws_origin, task._drag_we_origin, true);
+                    } else {
+                        this._restoreDescendants(id, true);
+                    }
+                }
+            } else if (mode === "move") {
+                const origDurationMs = task._drag_end_origin && task._drag_start_origin
+                    ? (task._drag_end_origin.getTime() - task._drag_start_origin.getTime())
+                    : (task.end_date.getTime() - task.start_date.getTime());
+
+                let candidateStart = snapDateToGrid(task.start_date, zoomLevel);
+
+                if (this._snapTargetTimestamps && this._snapTargetTimestamps.length > 0 && typeof g.posFromDate === "function") {
+                    const startPx = this.safePosFromDate(candidateStart);
+                    const candidateEnd = new Date(candidateStart.getTime() + origDurationMs);
+                    const endPx = this.safePosFromDate(candidateEnd);
 
                     let bestDiff = Infinity;
                     let bestType = null;
@@ -1379,19 +2617,62 @@ export class GanntLTAction extends Component {
 
                     if (bestMs !== null) {
                         if (bestType === "start") {
-                            task.start_date = new Date(bestMs);
-                            task.end_date = new Date(bestMs + origDurationMs);
+                            candidateStart = new Date(bestMs);
                             snappedGuidePx = bestTargetPx;
                             task._magnetically_snapped_start = true;
                         } else if (bestType === "end") {
-                            task.end_date = new Date(bestMs);
-                            task.start_date = new Date(bestMs - origDurationMs);
+                            candidateStart = new Date(bestMs - origDurationMs);
                             snappedGuidePx = bestTargetPx;
                             task._magnetically_snapped_end = true;
                         }
                     } else {
                         task._magnetically_snapped_start = false;
                         task._magnetically_snapped_end = false;
+                    }
+                }
+
+                // Strict parent boundary rule: subtask cannot be moved outside parent task boundaries
+                const isSubtaskOfTask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+                if (isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+                    const pTask = g.getTask(task.parent);
+                    if (pTask && pTask.start_date && pTask.end_date) {
+                        const pStartMs = pTask.start_date.getTime();
+                        const pEndMs = pTask.end_date.getTime();
+
+                        if (candidateStart.getTime() < pStartMs) {
+                            candidateStart = new Date(pStartMs);
+                        }
+                        if (candidateStart.getTime() + origDurationMs > pEndMs) {
+                            candidateStart = new Date(pEndMs - origDurationMs);
+                            if (candidateStart.getTime() < pStartMs) {
+                                candidateStart = new Date(pStartMs);
+                            }
+                        }
+                    }
+                } else if (task.parent && g.isTaskExists && g.isTaskExists(task.parent)) {
+                    // Task inside milestone or project: moving task expands container if needed
+                    let curAncId = task.parent;
+                    while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                        const anc = g.getTask(curAncId);
+                        if (anc && anc.start_date && candidateStart < anc.start_date) {
+                            anc.start_date = new Date(candidateStart);
+                            g.refreshTask(curAncId);
+                        }
+                        if (anc && anc.end_date && (candidateStart.getTime() + origDurationMs) > anc.end_date.getTime()) {
+                            anc.end_date = new Date(candidateStart.getTime() + origDurationMs);
+                            g.refreshTask(curAncId);
+                        }
+                        curAncId = anc.parent;
+                    }
+                }
+
+                task.start_date = candidateStart;
+                task.end_date = new Date(candidateStart.getTime() + origDurationMs);
+                if (isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+                    const pTask = g.getTask(task.parent);
+                    if (pTask && pTask.end_date && task.end_date.getTime() > pTask.end_date.getTime()) {
+                        task.end_date = new Date(pTask.end_date);
+                        task.start_date = new Date(Math.max(pTask.start_date ? pTask.start_date.getTime() : 0, pTask.end_date.getTime() - origDurationMs));
                     }
                 }
             }
@@ -1413,44 +2694,12 @@ export class GanntLTAction extends Component {
                             if (childTask && childTask._drag_start_origin && childTask._drag_end_origin) {
                                 childTask.start_date = new Date(childTask._drag_start_origin.getTime() + diffMs);
                                 childTask.end_date = new Date(childTask._drag_end_origin.getTime() + diffMs);
-                                g.updateTask(childId);
+                                g.refreshTask(childId);
                                 shiftDescendants(childId);
                             }
                         }
                     };
                     shiftDescendants(id);
-                }
-            }
-
-            // Visually adjust parent task / milestone / project in real-time from children bounds
-            if (task.parent && g.isTaskExists && g.isTaskExists(task.parent)) {
-                let p = g.getTask(task.parent);
-                while (p) {
-                    const pChildren = (typeof g.getChildren === "function" ? g.getChildren(p.id) : []) || [];
-                    if (pChildren.length > 0) {
-                        let minCS = null;
-                        let maxCE = null;
-                        for (const cid of pChildren) {
-                            const ct = g.getTask(cid);
-                            if (ct && ct.start_date && ct.end_date) {
-                                if (!minCS || ct.start_date < minCS) minCS = ct.start_date;
-                                if (!maxCE || ct.end_date > maxCE) maxCE = ct.end_date;
-                            }
-                        }
-                        let parentUpdated = false;
-                        if (minCS && (!p.start_date || p.start_date.getTime() !== minCS.getTime())) {
-                            p.start_date = new Date(minCS);
-                            parentUpdated = true;
-                        }
-                        if (maxCE && (!p.end_date || p.end_date.getTime() !== maxCE.getTime())) {
-                            p.end_date = new Date(maxCE);
-                            parentUpdated = true;
-                        }
-                        if (parentUpdated) {
-                            g.updateTask(p.id);
-                        }
-                    }
-                    p = (p.parent && g.isTaskExists(p.parent)) ? g.getTask(p.parent) : null;
                 }
             }
         }));
@@ -1473,109 +2722,227 @@ export class GanntLTAction extends Component {
                 delete task._fixed_parent;
             }
 
-            const isHourlyMode = (this.state.zoomLevel >= 300);
-            let workStart, workEnd;
+            const zoomLevel = this.state.zoomLevel;
+            const isIntraDay = task.is_hourly || isIntraDayWorkSpan(task.work_start_date, task.work_end_date);
+            const minDurMs = getMinGridDurationMs(zoomLevel, isIntraDay);
+            const origDurationMs = (task._drag_end_origin && task._drag_start_origin)
+                ? (task._drag_end_origin.getTime() - task._drag_start_origin.getTime())
+                : (task.end_date.getTime() - task.start_date.getTime());
 
-            if (isHourlyMode) {
-                // In hourly/minute view (>= 300%), preserve exact dragged/resized hours and minutes
-                const sDate = new Date(task.start_date);
-                const eDate = new Date(task.end_date);
-                sDate.setSeconds(0, 0);
-                eDate.setSeconds(0, 0);
-                const minDurationMs = (this.state.zoomLevel >= 600 ? 900000 : 3600000); // 15 min or 1 hour
-                if (eDate.getTime() <= sDate.getTime()) {
-                    eDate.setTime(sDate.getTime() + minDurationMs);
+            const isSubtaskOfTask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+
+            const isStartHandle = mode === "resize" && (
+                (task._drag_from_start !== undefined)
+                    ? task._drag_from_start
+                    : (task._drag_start_origin && Math.abs(task.start_date.getTime() - task._drag_start_origin.getTime()) > 0)
+            );
+
+            const origWS = task._drag_ws_origin || parseWorkDateStr(task.work_start_date) || task.start_date;
+            const origWE = task._drag_we_origin || parseWorkDateStr(task.work_end_date) || task.end_date;
+            const origGS = task._drag_start_origin || task.start_date;
+            const origGE = task._drag_end_origin || task.end_date;
+
+            let { workStart, workEnd, changed } = computeDragWorkDates({
+                mode,
+                isStartHandle,
+                origWS,
+                origWE,
+                origGS,
+                origGE,
+                rawStart: task.start_date,
+                rawEnd: task.end_date,
+                zoomLevel,
+            });
+
+            // Strict parent boundary rule: subtask cannot be moved outside parent task boundaries
+            if (mode === "move" && isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+                const pTask = g.getTask(task.parent);
+                const pWS = parseWorkDateStr(pTask.work_start_date);
+                const pWE = parseWorkDateStr(pTask.work_end_date);
+                if (pWS && pWE) {
+                    const taskDurMs = workEnd.getTime() - workStart.getTime();
+                    if (workStart.getTime() < pWS.getTime()) {
+                        workStart = new Date(pWS);
+                        workEnd = new Date(workStart.getTime() + taskDurMs);
+                        changed = true;
+                    }
+                    if (workEnd.getTime() > pWE.getTime()) {
+                        workEnd = new Date(pWE);
+                        workStart = new Date(Math.max(pWS.getTime(), workEnd.getTime() - taskDurMs));
+                        changed = true;
+                    }
                 }
-                task.start_date = sDate;
-                task.end_date = eDate;
-                workStart = new Date(sDate);
-                workEnd = new Date(eDate);
-            } else {
-                // Normalize task dates to clean midnight boundaries on the Gantt grid
-                task.start_date = new Date(task.start_date.getFullYear(), task.start_date.getMonth(), task.start_date.getDate(), 0, 0, 0);
-                task.end_date = new Date(task.end_date.getFullYear(), task.end_date.getMonth(), task.end_date.getDate(), 0, 0, 0);
-                if (task.end_date.getTime() <= task.start_date.getTime()) {
-                    task.end_date = new Date(task.start_date.getTime() + 86400000);
+            } else if (task.parent && g.isTaskExists && g.isTaskExists(task.parent)) {
+                // Task inside milestone or project: moving/resizing expands ancestor containers if needed
+                let curAncId = task.parent;
+                while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                    const anc = g.getTask(curAncId);
+                    const ancWS = parseWorkDateStr(anc.work_start_date);
+                    const ancWE = parseWorkDateStr(anc.work_end_date);
+                    let ancChanged = false;
+                    let newAncWS = ancWS;
+                    let newAncWE = ancWE;
+                    if (ancWS && workStart < ancWS) {
+                        newAncWS = new Date(workStart);
+                        ancChanged = true;
+                    }
+                    if (ancWE && workEnd > ancWE) {
+                        newAncWE = new Date(workEnd);
+                        ancChanged = true;
+                    }
+                    if (ancChanged) {
+                        anc.work_start_date = formatOdooDateTime(newAncWS);
+                        anc.work_end_date = formatOdooDateTime(newAncWE);
+                        const { gridStart: aGS, gridEnd: aGE } = workDatesToVisualGrid(newAncWS, newAncWE, zoomLevel);
+                        anc.start_date = aGS;
+                        anc.end_date = aGE;
+                        g.updateTask(curAncId);
+                    }
+                    curAncId = anc.parent;
                 }
-                const computed = computeWorkDates(task.start_date, task.end_date);
-                workStart = computed.workStart;
-                workEnd = computed.workEnd;
+            }
+
+            const { gridStart, gridEnd } = workDatesToVisualGrid(workStart, workEnd, zoomLevel);
+            task.start_date = gridStart;
+            task.end_date = gridEnd;
+            task.work_start_date = formatOdooDateTime(workStart);
+            task.work_end_date = formatOdooDateTime(workEnd);
+
+            if (typeof g.calculateDuration === "function") {
+                task.duration = g.calculateDuration(task.start_date, task.end_date);
             }
 
             delete task._magnetically_snapped_start;
             delete task._magnetically_snapped_end;
             delete task._is_dragged;
+            delete task._drag_from_start;
+
+            // If parent was resized, finalize descendant scaling (only scale down when shrinking)
+            if (mode === "resize" && origWS && origWE) {
+                const pOrigDur = origWE.getTime() - origWS.getTime();
+                const pFinalDur = workEnd.getTime() - workStart.getTime();
+
+                if (pFinalDur < pOrigDur && pOrigDur > 0) {
+                    this._applyScaleDescendants(id, workStart, workEnd, origWS, origWE, false);
+                } else {
+                    this._restoreDescendants(id, false);
+                }
+            }
+
+            // Real-time cascading move for descendants in work-time
+            if (mode === "move" && changed && origWS) {
+                const isExact = isExactTimeResolution(zoomLevel);
+                const deltaMs = workStart.getTime() - origWS.getTime();
+                const kDays = Math.round(deltaMs / 86400000);
+
+                const shiftDescendantsWork = (parentId) => {
+                    const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+                    for (const childId of children) {
+                        const childTask = g.getTask(childId);
+                        if (childTask && childTask._drag_ws_origin && childTask._drag_we_origin) {
+                            const cWorkStart = isExact
+                                ? new Date(childTask._drag_ws_origin.getTime() + deltaMs)
+                                : addCalendarDays(childTask._drag_ws_origin, kDays);
+                            const cWorkEnd = isExact
+                                ? new Date(childTask._drag_we_origin.getTime() + deltaMs)
+                                : addCalendarDays(childTask._drag_we_origin, kDays);
+                            childTask.work_start_date = formatOdooDateTime(cWorkStart);
+                            childTask.work_end_date = formatOdooDateTime(cWorkEnd);
+                            const { gridStart: cGridStart, gridEnd: cGridEnd } = workDatesToVisualGrid(cWorkStart, cWorkEnd, zoomLevel);
+                            childTask.start_date = cGridStart;
+                            childTask.end_date = cGridEnd;
+                            g.updateTask(childId);
+                            shiftDescendantsWork(childId);
+                        }
+                    }
+                };
+                shiftDescendantsWork(id);
+            }
 
             const updates = [];
-            task.work_start_date = formatOdooDateTime(workStart);
-            task.work_end_date = formatOdooDateTime(workEnd);
+            task._established_start = new Date(gridStart);
+            task._established_end = new Date(gridEnd);
+            task._established_work_start = formatOdooDateTime(workStart);
+            task._established_work_end = formatOdooDateTime(workEnd);
+            task._established_alloc_hours = task.allocated_hours;
             if (task.is_milestone) {
                 task.planned_date_start = formatOdooDateTime(workStart);
                 task.planned_date_end = formatOdooDateTime(workEnd);
             }
 
-            // Re-evaluate deadline delay on dragged task: only delayed if explicit date_deadline > end_date or active timer
-            if (task.deadline_end && task.date_deadline) {
-                const dlEnd = task.deadline_end instanceof Date
-                    ? task.deadline_end
-                    : new Date(String(task.deadline_end).replace(/-/g, "/"));
-                if (!isNaN(dlEnd.getTime()) && dlEnd > task.end_date) {
-                    task.has_deadline_delay = true;
-                    task.delay_days = Math.max(1, Math.round((dlEnd.getTime() - task.end_date.getTime()) / 86400000));
-                } else {
-                    task.has_deadline_delay = false;
-                    task.delay_days = 0;
+            // Re-evaluate the red tail on the dragged task (real clock times, not grid coordinates).
+            // Same rule as the backend: tail = planned end -> deadline when the deadline is LATER than the new end.
+            // Dragging an auto-plan leaf makes its plan manual (user action); containers keep following their children.
+            if (task.has_own_deadline !== false) {
+                let newKind = "";
+                let newMs = 0;
+                const nowMs = Date.now();
+                const hasKids = typeof g.hasChild === "function" ? g.hasChild(task.id) : false;
+                if (!task.is_project && !task.is_milestone && !hasKids) {
+                    task.plan_is_manual = true;
                 }
-            } else if (!task.timer_running) {
-                task.has_deadline_delay = false;
-                task.delay_days = 0;
+                const tailAllowed = task.plan_is_manual !== false || hasKids || task.is_project || task.is_milestone;
+                if (tailAllowed && task.deadline_end && (task.date_deadline || task.has_deadline)) {
+                    const dlEnd = task.deadline_end instanceof Date
+                        ? task.deadline_end
+                        : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                    if (!isNaN(dlEnd.getTime()) && dlEnd.getTime() > workEnd.getTime()) {
+                        newKind = "late";
+                        newMs = dlEnd.getTime() - workEnd.getTime();
+                    }
+                }
+                if (!newKind && task.is_timer_running && task.plan_is_manual !== false && nowMs > workEnd.getTime()) {
+                    newKind = "timer";
+                    newMs = nowMs - workEnd.getTime();
+                }
+                task.has_deadline_delay = Boolean(newKind);
+                task.delay_kind = newKind;
+                task.delay_minutes = newKind ? Math.max(1, Math.ceil(newMs / 60000)) : 0;
+                task.delay_days = newKind ? Math.floor(newMs / 86400000) : 0;
+                task.delay_hours = newKind ? Math.round((newMs / 3600000) * 10) / 10 : 0;
             }
 
             // Real-time update of allocated working hours from darbo valandos
             const workCalc = calculateWorkingDaysAndHours(workStart, workEnd);
-            task.allocated_hours = `${workCalc.workHours}h`;
+            if (workCalc.workHours > 0) {
+                task.allocated_hours = formatHoursLabel(workCalc.workHours);
+            }
+            if (changed) {
+                updates.push({
+                    id: task.id,
+                    start_date: formatOdooDateTime(workStart),
+                    end_date: formatOdooDateTime(workEnd),
+                    progress: task.progress,
+                    allocated_hours: workCalc.workHours,
+                });
+            }
 
-            updates.push({
-                id: task.id,
-                start_date: formatOdooDateTime(workStart),
-                end_date: formatOdooDateTime(workEnd),
-                progress: task.progress,
-                allocated_hours: workCalc.workHours,
-            });
-
-            if (mode === "move") {
+            if (mode === "move" || mode === "resize") {
                 const collectDescendants = (parentId) => {
                     const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
                     for (const childId of children) {
                         const childTask = g.getTask(childId);
-                        if (childTask) {
-                            let cWorkStart, cWorkEnd;
-                            if (isHourlyMode) {
-                                childTask.start_date.setSeconds(0, 0);
-                                childTask.end_date.setSeconds(0, 0);
-                                if (childTask.end_date.getTime() <= childTask.start_date.getTime()) {
-                                    childTask.end_date = new Date(childTask.start_date.getTime() + 3600000);
-                                }
-                                cWorkStart = new Date(childTask.start_date);
-                                cWorkEnd = new Date(childTask.end_date);
-                            } else {
-                                childTask.start_date = new Date(childTask.start_date.getFullYear(), childTask.start_date.getMonth(), childTask.start_date.getDate(), 0, 0, 0);
-                                childTask.end_date = new Date(childTask.end_date.getFullYear(), childTask.end_date.getMonth(), childTask.end_date.getDate(), 0, 0, 0);
-                                if (childTask.end_date.getTime() <= childTask.start_date.getTime()) {
-                                    childTask.end_date = new Date(childTask.start_date.getTime() + 86400000);
-                                }
-                                const cWork = computeWorkDates(childTask.start_date, childTask.end_date);
-                                cWorkStart = cWork.workStart;
-                                cWorkEnd = cWork.workEnd;
-                            }
-                            childTask.work_start_date = formatOdooDateTime(cWorkStart);
-                            childTask.work_end_date = formatOdooDateTime(cWorkEnd);
+                        if (!childTask) continue;
+                        const cWorkStart = parseWorkDateStr(childTask.work_start_date);
+                        const cWorkEnd = parseWorkDateStr(childTask.work_end_date);
+                        const unchanged = Boolean(
+                            childTask._drag_ws_origin && childTask._drag_we_origin && cWorkStart && cWorkEnd
+                            && cWorkStart.getTime() === childTask._drag_ws_origin.getTime()
+                            && cWorkEnd.getTime() === childTask._drag_we_origin.getTime()
+                        );
+                        if (!unchanged && cWorkStart && cWorkEnd) {
+                            childTask._established_start = new Date(childTask.start_date);
+                            childTask._established_end = new Date(childTask.end_date);
+                            childTask._established_work_start = formatOdooDateTime(cWorkStart);
+                            childTask._established_work_end = formatOdooDateTime(cWorkEnd);
+
                             if (childTask.is_milestone) {
                                 childTask.planned_date_start = formatOdooDateTime(cWorkStart);
                                 childTask.planned_date_end = formatOdooDateTime(cWorkEnd);
                             }
                             const cWorkCalc = calculateWorkingDaysAndHours(cWorkStart, cWorkEnd);
-                            childTask.allocated_hours = `${cWorkCalc.workHours}h`;
+                            if (cWorkCalc.workHours > 0) childTask.allocated_hours = formatHoursLabel(cWorkCalc.workHours);
+                            childTask._established_alloc_hours = childTask.allocated_hours;
 
                             updates.push({
                                 id: childTask.id,
@@ -1584,10 +2951,12 @@ export class GanntLTAction extends Component {
                                 progress: childTask.progress,
                                 allocated_hours: cWorkCalc.workHours,
                             });
-                            delete childTask._drag_start_origin;
-                            delete childTask._drag_end_origin;
-                            collectDescendants(childId);
                         }
+                        delete childTask._drag_start_origin;
+                        delete childTask._drag_end_origin;
+                        delete childTask._drag_ws_origin;
+                        delete childTask._drag_we_origin;
+                        collectDescendants(childId);
                     }
                 };
                 collectDescendants(id);
@@ -1595,6 +2964,133 @@ export class GanntLTAction extends Component {
 
             delete task._drag_start_origin;
             delete task._drag_end_origin;
+            delete task._drag_ws_origin;
+            delete task._drag_we_origin;
+
+            // Save the exact current scroll position before saving/rendering
+            const scrollPos = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
+            const state = g.getState ? g.getState() : {};
+            const minScale = state.min_date || g.config.start_date;
+            const maxScale = state.max_date || g.config.end_date;
+            let needsScaleExpand = (minScale && task.start_date < minScale) || (maxScale && task.end_date > maxScale);
+
+            // Update ancestor containers (parent task, milestone, project) in real-time to encompass children without creating fake deadline delays
+            let currParentId = task.parent;
+            while (currParentId && g.isTaskExists(currParentId)) {
+                const parent = g.getTask(currParentId);
+                const pChildren = (typeof g.getChildren === "function" ? g.getChildren(currParentId) : []) || [];
+                if (pChildren.length > 0) {
+                    let minCS = null;
+                    let maxCE = null;
+                    let minWorkS = null;
+                    let maxWorkE = null;
+                    for (const cid of pChildren) {
+                        const ct = g.getTask(cid);
+                        if (ct && ct.start_date && ct.end_date) {
+                            if (!minCS || ct.start_date < minCS) minCS = new Date(ct.start_date);
+                            if (!maxCE || ct.end_date > maxCE) maxCE = new Date(ct.end_date);
+                            const cws = parseWorkDateStr(ct.work_start_date);
+                            const cwe = parseWorkDateStr(ct.work_end_date);
+                            if (cws && (!minWorkS || cws < minWorkS)) minWorkS = cws;
+                            if (cwe && (!maxWorkE || cwe > maxWorkE)) maxWorkE = cwe;
+                        }
+                    }
+                    // R3: a parent with a MANUAL plan keeps its own span; children beyond it become its red tail.
+                    const parentIsManual = parent.plan_is_manual === true;
+                    const pEstStart = parent._established_start || parent.start_date;
+                    const pEstEnd = parent._established_end || parent.end_date;
+                    const pEstWorkStart = parseWorkDateStr(parent._established_work_start || parent.work_start_date);
+                    const pEstWorkEnd = parseWorkDateStr(parent._established_work_end || parent.work_end_date);
+
+                    // RULE: Child cannot decrease parent's established length, only increase (expand) it!
+                    const finalGridStart = (pEstStart && minCS) ? (minCS < pEstStart ? minCS : pEstStart) : (minCS || pEstStart);
+                    const finalGridEnd = (pEstEnd && maxCE) ? (maxCE > pEstEnd ? maxCE : pEstEnd) : (maxCE || pEstEnd);
+
+                    const finalWorkStart = (pEstWorkStart && minWorkS) ? (minWorkS < pEstWorkStart ? minWorkS : pEstWorkStart) : (minWorkS || pEstWorkStart);
+                    const finalWorkEnd = (pEstWorkEnd && maxWorkE) ? (maxWorkE > pEstWorkEnd ? maxWorkE : pEstWorkEnd) : (maxWorkE || pEstWorkEnd);
+
+                    let ancChanged = false;
+                    if (!parentIsManual && finalGridStart && finalGridEnd) {
+                        if (parent.start_date.getTime() !== finalGridStart.getTime() || parent.end_date.getTime() !== finalGridEnd.getTime()) {
+                            ancChanged = true;
+                        }
+                        if (minScale && finalGridStart < minScale) needsScaleExpand = true;
+                        if (maxScale && finalGridEnd > maxScale) needsScaleExpand = true;
+
+                        parent.start_date = finalGridStart;
+                        parent.end_date = finalGridEnd;
+                        const pWork = (finalWorkStart && finalWorkEnd)
+                            ? { workStart: finalWorkStart, workEnd: finalWorkEnd }
+                            : visualGridToWorkDates(finalGridStart, finalGridEnd, zoomLevel, parent.work_start_date, parent.work_end_date, "move");
+                        parent.work_start_date = formatOdooDateTime(pWork.workStart);
+                        parent.work_end_date = formatOdooDateTime(pWork.workEnd);
+
+                        // Only recalculate allocated_hours if the parent expanded beyond its established span
+                        if ((pEstWorkStart && finalWorkStart < pEstWorkStart) || (pEstWorkEnd && finalWorkEnd > pEstWorkEnd)) {
+                            const pWorkCalc = calculateWorkingDaysAndHours(pWork.workStart, pWork.workEnd);
+                            if (pWorkCalc.workHours > 0) parent.allocated_hours = formatHoursLabel(pWorkCalc.workHours);
+                            parent._established_alloc_hours = parent.allocated_hours;
+                        } else if (parent._established_alloc_hours) {
+                            parent.allocated_hours = parent._established_alloc_hours;
+                        }
+
+                        if (ancChanged) {
+                            updates.push({
+                                id: parent.id,
+                                start_date: parent.work_start_date,
+                                end_date: parent.work_end_date,
+                                progress: parent.progress,
+                                allocated_hours: parent.allocated_hours ? parseHoursLabel(parent.allocated_hours) : 0,
+                            });
+                        }
+                    }
+                    // Red tail of the parent = latest child end (planned end or deadline) beyond the parent's own end,
+                    // or the parent's own typed deadline, whichever is later.
+                    const parentWorkEnd = parseWorkDateStr(parent.work_end_date) || parent.end_date;
+                    if (parent._manual_dl === undefined) {
+                        parent._manual_dl = (parent.has_own_deadline && !parent.deadline_is_auto && parent.deadline_end)
+                            ? (parent.deadline_end instanceof Date ? parent.deadline_end : new Date(String(parent.deadline_end).replace(/-/g, "/")))
+                            : null;
+                    }
+                    let tailEnd = (parent._manual_dl && !isNaN(parent._manual_dl.getTime())) ? parent._manual_dl : null;
+                    let tailKind = "late";
+                    for (const cid of pChildren) {
+                        const ct = g.getTask(cid);
+                        if (!ct) continue;
+                        let eff = parseWorkDateStr(ct.work_end_date) || ct.end_date;
+                        if (ct.has_deadline_delay && ct.deadline_end) {
+                            const cDl = ct.deadline_end instanceof Date
+                                ? ct.deadline_end
+                                : new Date(String(ct.deadline_end).replace(/-/g, "/"));
+                            if (!isNaN(cDl.getTime()) && (!eff || cDl > eff)) {
+                                eff = cDl;
+                                if (ct.delay_kind === "timer") tailKind = "timer";
+                            }
+                        }
+                        if (eff && (!tailEnd || eff > tailEnd)) tailEnd = eff;
+                    }
+                    if (tailEnd && parentWorkEnd && tailEnd.getTime() > parentWorkEnd.getTime()) {
+                        const diffMs = tailEnd.getTime() - parentWorkEnd.getTime();
+                        parent.has_deadline = true;
+                        parent.has_deadline_delay = true;
+                        parent.delay_kind = tailKind;
+                        parent.deadline_end = formatOdooDateTime(tailEnd);
+                        parent.date_deadline = parent.deadline_end;
+                        parent.delay_minutes = Math.max(1, Math.ceil(diffMs / 60000));
+                        parent.delay_days = Math.floor(diffMs / 86400000);
+                        parent.delay_hours = Math.round((diffMs / 3600000) * 10) / 10;
+                    } else {
+                        parent.has_deadline_delay = false;
+                        parent.delay_kind = "";
+                        parent.delay_minutes = 0;
+                        parent.delay_days = 0;
+                        parent.delay_hours = 0;
+                    }                    if (!needsScaleExpand) {
+                        g.updateTask(currParentId);
+                    }
+                }
+                currParentId = parent.parent;
+            }
 
             // Check if anything actually changed compared to the previous snapshot
             if (this._pendingUndoAction && this._pendingUndoAction.previous) {
@@ -1616,66 +3112,8 @@ export class GanntLTAction extends Component {
                 this._pendingUndoAction = null;
             }
 
-            // Save the exact current scroll position before saving/rendering
-            const scrollPos = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
-            const state = g.getState ? g.getState() : {};
-            const minScale = state.min_date || g.config.start_date;
-            const maxScale = state.max_date || g.config.end_date;
-            const needsScaleExpand = (minScale && task.start_date < minScale) || (maxScale && task.end_date > maxScale);
-
             try {
                 await this.orm.call("project.task", "save_timeline_batch_schedule", [updates]);
-
-                // Update ancestor containers (parent task, milestone, project) in real-time to encompass children without creating fake deadline delays
-                let currParentId = task.parent;
-                while (currParentId && g.isTaskExists(currParentId)) {
-                    const parent = g.getTask(currParentId);
-                    const pChildren = (typeof g.getChildren === "function" ? g.getChildren(currParentId) : []) || [];
-                    if (pChildren.length > 0) {
-                        let minCS = null;
-                        let maxCE = null;
-                        let maxDelayedDl = null;
-                        for (const cid of pChildren) {
-                            const ct = g.getTask(cid);
-                            if (ct && ct.start_date && ct.end_date) {
-                                if (!minCS || ct.start_date < minCS) minCS = new Date(ct.start_date);
-                                if (!maxCE || ct.end_date > maxCE) maxCE = new Date(ct.end_date);
-                                if (ct.has_deadline_delay && ct.deadline_end) {
-                                    const cDl = ct.deadline_end instanceof Date
-                                        ? ct.deadline_end
-                                        : new Date(String(ct.deadline_end).replace(/-/g, "/"));
-                                    if (!isNaN(cDl.getTime()) && (!maxDelayedDl || cDl > maxDelayedDl)) {
-                                        maxDelayedDl = cDl;
-                                    }
-                                }
-                            }
-                        }
-                        if (minCS && maxCE) {
-                            parent.start_date = minCS;
-                            parent.end_date = maxCE;
-                            const pWork = isHourlyMode
-                                ? { workStart: new Date(minCS), workEnd: new Date(maxCE) }
-                                : computeWorkDates(minCS, maxCE);
-                            parent.work_start_date = formatOdooDateTime(pWork.workStart);
-                            parent.work_end_date = formatOdooDateTime(pWork.workEnd);
-                            const pWorkCalc = calculateWorkingDaysAndHours(pWork.workStart, pWork.workEnd);
-                            parent.allocated_hours = `${pWorkCalc.workHours}h`;
-                        }
-                        if (maxDelayedDl && parent.end_date && maxDelayedDl > parent.end_date) {
-                            parent.deadline_end = formatOdooDateTime(maxDelayedDl);
-                            parent.has_deadline = true;
-                            parent.has_deadline_delay = true;
-                            parent.delay_days = Math.max(1, Math.round((maxDelayedDl.getTime() - parent.end_date.getTime()) / 86400000));
-                        } else if (!parent.date_deadline) {
-                            parent.has_deadline_delay = false;
-                            parent.delay_days = 0;
-                        }
-                        if (!needsScaleExpand) {
-                            g.updateTask(currParentId);
-                        }
-                    }
-                    currParentId = parent.parent;
-                }
 
                 if (needsScaleExpand) {
                     this.ensureTimelineRange(task.start_date, task.end_date);
@@ -1791,13 +3229,13 @@ export class GanntLTAction extends Component {
                     this.notification.add(_t("Jūs turite tik peržiūros („Can View“) teises."), { type: "warning" });
                     return;
                 } else if (action === "delete") {
-                    if (confirm(_t("Ar tikrai norite ištrinti šią užduotį?"))) {
+                    if (await this.askConfirm(_t("Ar tikrai norite ištrinti šią užduotį?"))) {
                         await this.orm.call("project.task", "delete_timeline_task", [id]);
                         await this.loadTimelineData();
                         this.notification.add(_t("Užduotis ištrinta"), { type: "success" });
                     }
                 } else if (action === "delete_milestone") {
-                    if (confirm(_t("Ar tikrai norite ištrinti šią gairę?"))) {
+                    if (await this.askConfirm(_t("Ar tikrai norite ištrinti šią gairę?"))) {
                         await this.orm.call("project.task", "delete_timeline_milestone", [id]);
                         await this.loadTimelineData();
                         this.notification.add(_t("Gairė ištrinta"), { type: "success" });
@@ -1912,6 +3350,74 @@ export class GanntLTAction extends Component {
             this.ganttElement.el.addEventListener("wheel", this.onWheelHandler, { passive: false });
         }
 
+        if (this.onMouseMoveHandler && this.ganttElement.el) {
+            this.ganttElement.el.removeEventListener("mousemove", this.onMouseMoveHandler);
+        }
+        if (this.onMouseLeaveHandler && this.ganttElement.el) {
+            this.ganttElement.el.removeEventListener("mouseleave", this.onMouseLeaveHandler);
+        }
+
+        this.onMouseMoveHandler = (e) => {
+            const g = this.gantt;
+            if (!g || this._isZooming) return;
+            if (g.getState && (g.getState().drag_id || g.getState().drag_mode)) {
+                this.clearHoverHighlight();
+                return;
+            }
+
+            const target = e.target;
+            if (!target) return;
+
+            // If hovering over a holiday cell in the background or scale, dynamically set the holiday tooltip
+            const holidayEl = target.closest ? target.closest(".holiday_cell, .holiday_scale_cell") : null;
+            if (holidayEl && !holidayEl.title && g.dateFromPos) {
+                try {
+                    const taskArea = this.ganttElement.el.querySelector(".gantt_task") || this.ganttElement.el.querySelector(".gantt_data_area");
+                    if (taskArea) {
+                        const areaRect = taskArea.getBoundingClientRect();
+                        const scrollX = g.getScrollState ? g.getScrollState().x : 0;
+                        const dataX = (e.clientX - areaRect.left) + scrollX;
+                        const d = g.dateFromPos(dataX);
+                        if (d) {
+                            const holName = getLithuanianHoliday(d);
+                            if (holName) holidayEl.title = holName;
+                        }
+                    }
+                } catch {}
+            }
+
+            const taskContainer = target.closest ? target.closest("[task_id], [data-task-id]") : null;
+            let taskId = null;
+            if (taskContainer) {
+                taskId = taskContainer.getAttribute("task_id") || taskContainer.getAttribute("data-task-id");
+            }
+            if (!taskId && g.locate) {
+                try {
+                    taskId = g.locate(e);
+                } catch {}
+            }
+
+            if (!taskId || !g.isTaskExists(taskId)) {
+                if (this._currentHoveredTaskId !== null) {
+                    this.clearHoverHighlight();
+                }
+                return;
+            }
+
+            if (taskId === this._currentHoveredTaskId) {
+                return;
+            }
+
+            this.applyHoverHighlight(taskId);
+        };
+
+        this.onMouseLeaveHandler = () => {
+            this.clearHoverHighlight();
+        };
+
+        this.ganttElement.el.addEventListener("mousemove", this.onMouseMoveHandler);
+        this.ganttElement.el.addEventListener("mouseleave", this.onMouseLeaveHandler);
+
         // Initialize inside container
         g.init(this.ganttElement.el);
     }
@@ -1937,18 +3443,17 @@ export class GanntLTAction extends Component {
     }
 
     /**
-     * Applies timeframe scales: Diena, Savaitė, Mėnuo, Metai
-     * Translates months & weekdays to Lithuanian, marks weekends (#f1f3f7) and national holidays.
+     * Unified timescale configuration driven purely by zoomLevel (10% to 600%).
+     * - 10% (largest scale): 6 years visible across viewport (3 years backward, 3 years forward from center)
+     * - 10% to 40%: Year -> Quarter -> Month -> Week
+     * - 50% to 200%: Year -> Quarter -> Month -> Week -> Day
+     * - 250% to 550%: Year -> Month -> Week -> Day -> Hour
+     * - 600% (smallest scale): Year -> Month -> Day -> Hour -> Minute (kas 15 min.)
      */
     /**
-     * Unified timescale configuration driven purely by zoomLevel.
-     * Consistent Top-to-Bottom hierarchy across all zoom levels:
-     * 1. Metai (Year: %Y)
-     * 2. Ketvirtis (Quarter: 1, 2, 3, 4)
-     * 3. Mėnuo (Month: with Lithuanian month name)
-     * 4. Savaitė (Week: ISO week number)
-     * 5. Diena (Day: day number, holidays, weekends) — shown when zoomLevel >= 50%.
-     * Below 50% (< 50%): Day is omitted, keeping Year -> Quarter -> Month -> Week intact so UI doesn't jump.
+     * Apply scale configuration dynamically based on zoomLevel and container width.
+     * Ensures perfect alignment from very top to very bottom across Year, Quarter, Month, Week, Day.
+     * Strips holidays of any stars and ensures uniform styling across all zoom levels.
      */
     applyScaleConfig(customColWidth = null) {
         const g = this.gantt;
@@ -1965,255 +3470,328 @@ export class GanntLTAction extends Component {
                 d.getDate() === today.getDate()
             );
             const hol = getLithuanianHoliday(d);
-            const wknd = isWeekend(d);
+            const isWorkDay = this.isWorkingDay(d);
+
+            if (scale.unit === "minute") {
+                const isWorkHour = this.isWorkingDateTime(d, scale.step || 15);
+                const m = d.getMinutes();
+                const classes = ["minute_scale_cell"];
+                if (isWorkHour) {
+                    classes.push("work_hour_scale_cell");
+                } else {
+                    classes.push("off_hour_scale_cell");
+                }
+                if (m === 0) {
+                    classes.push("hour_boundary_cell");
+                }
+                return classes.join(" ");
+            }
 
             if (scale.unit === "hour") {
-                const h = d.getHours();
+                const isWorkHour = this.isWorkingDateTime(d, scale.step ? scale.step * 60 : 60);
                 if (isToday) {
-                    return (h >= 8 && h <= 17 && !hol && !wknd) ? "today_scale_cell work_hour_scale_cell" : "today_scale_cell off_hour_scale_cell";
+                    return isWorkHour ? "today_scale_cell work_hour_scale_cell" : "today_scale_cell off_hour_scale_cell";
                 }
                 if (hol) return "holiday_scale_cell";
-                if (wknd) return "weekend_scale_cell";
-                return (h >= 8 && h <= 17) ? "work_hour_scale_cell" : "off_hour_scale_cell";
+                if (!isWorkDay) return "weekend_scale_cell";
+                return isWorkHour ? "work_hour_scale_cell" : "off_hour_scale_cell";
             }
 
             if (scale.unit === "day") {
                 const classes = [];
                 if (isToday) classes.push("today_scale_cell");
                 if (hol) classes.push("holiday_scale_cell");
-                else if (wknd) classes.push("weekend_scale_cell");
+                else if (!isWorkDay) classes.push("weekend_scale_cell");
+
+                if (d.getMonth() === 0 && d.getDate() === 1) classes.push("year_boundary_cell");
+                else if (d.getDate() === 1 && (d.getMonth() % 3 === 0)) classes.push("quarter_boundary_cell");
+                else if (d.getDate() === 1) classes.push("month_boundary_cell");
+
                 return classes.join(" ");
+            }
+
+            if (scale.unit === "month") {
+                const m = d.getMonth();
+                if (m === 0) return "year_boundary_cell";
+                if (m % 3 === 0) return "quarter_boundary_cell";
+                return "month_boundary_cell";
+            }
+
+            if (scale.unit === "quarter") {
+                if (d.getMonth() === 0) return "year_boundary_cell";
+                return "quarter_boundary_cell";
             }
 
             return "";
         };
 
-        const zoom = this.state.zoomLevel;
+        const visibleWidth = this.getTimelineVisibleWidth();
+        // Header labels of very wide cells are centred inside the visible part of the cell (see SCSS .gantt_scale_cell > span)
+        if (this.ganttElement && this.ganttElement.el) {
+            this.ganttElement.el.style.setProperty("--gantt-view-w", `${Math.max(120, Math.round(visibleWidth))}px`);
+        }
+        const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, visibleWidth);
+        const pxPerHour = pxPerDay / 24.0;
+        const pxPerMin = pxPerDay / 1440.0;
+
+        // Bounding box fit thresholds:
+        const canFitDays = pxPerDay >= 13; // At >= 30% zoom (14.3px), Day numbers fit!
+        const canFitWeeks = (pxPerDay * 7) >= 14; // At >= 15% zoom (19.6px), Week numbers fit!
+        const isWeeklyBase = canFitWeeks && !canFitDays; // 15% to 25% zoom
+
+        const getEffectiveDate = (date) => {
+            if (!isWeeklyBase) return date;
+            // When base scale is week, align Year, Quarter, and Month to the ISO Thursday of the week
+            // so Year 2027, Q1, Month 1 Saus, and Week 1 ALL start at the exact same column (Week 1)!
+            const d = new Date(date);
+            const day = (d.getDay() + 6) % 7; // 0 = Mon, 6 = Sun
+            d.setDate(d.getDate() - day + 3); // Thursday of this ISO week
+            return d;
+        };
 
         // 1. Year scale: Metai (%Y, e.g. 2026)
-        const yearScale = { unit: "year", step: 1, format: "%Y", css: () => "" };
+        const yearScale = {
+            unit: "year",
+            step: 1,
+            format: (date) => {
+                const eff = getEffectiveDate(date);
+                const y = eff.getFullYear();
+                return `<span title="${y} metai">${y}</span>`;
+            },
+            css: (date) => "year_scale_cell year_boundary_cell",
+            height: 22,
+        };
 
         // 2. Quarter scale: Ketvirtis (1, 2, 3, 4)
         const quarterScale = {
             unit: "quarter",
             step: 1,
-            format: (date) => Math.floor(date.getMonth() / 3) + 1,
-            css: () => "",
+            format: (date) => {
+                const eff = getEffectiveDate(date);
+                const q = Math.floor(eff.getMonth() / 3) + 1;
+                const fullTitle = `${eff.getFullYear()} m. ${q} ketvirtis`;
+                return `<span title="${fullTitle}">${q}</span>`;
+            },
+            css: (date) => (date.getMonth() === 0) ? "quarter_scale_cell year_boundary_cell" : "quarter_scale_cell quarter_boundary_cell",
+            height: 22,
         };
 
-        // 3. Month scale: Mėnuo (First number then name across all zoom levels: (10) Spalis)
-        let monthFormat;
-        if (zoom <= 15) {
-            monthFormat = (date) => {
-                const monthNum = String(date.getMonth() + 1).padStart(2, "0");
-                const shortName = LITHUANIAN_MONTHS_SHORT[date.getMonth()];
-                return `(${monthNum}) ${shortName}`;
-            };
-        } else {
-            monthFormat = (date) => {
-                const monthNum = String(date.getMonth() + 1).padStart(2, "0");
-                const monthName = LITHUANIAN_MONTHS[date.getMonth()];
-                return `(${monthNum}) ${monthName}`;
-            };
-        }
+        // 3. Month scale: Mėnuo (Displays "10 Spal" when wide enough, or "10" at macro zoom)
+        const monthWidth = pxPerDay * 30.4375;
         const monthScale = {
             unit: "month",
             step: 1,
-            format: monthFormat,
-            css: () => "",
+            format: (date) => {
+                const eff = getEffectiveDate(date);
+                const monthNumber = eff.getMonth() + 1;
+                const fullTitle = `${eff.getFullYear()} m. ${LITHUANIAN_MONTHS[eff.getMonth()]}`;
+                if (monthWidth >= 44) {
+                    const shortName = LITHUANIAN_MONTHS_SHORT[eff.getMonth()];
+                    return `<span title="${fullTitle}">${monthNumber} ${shortName}</span>`;
+                }
+                if (monthWidth >= 14) {
+                    return `<span title="${fullTitle}">${monthNumber}</span>`;
+                }
+                return "";
+            },
+            css: (date) => {
+                const m = date.getMonth();
+                if (m === 0) return "month_scale_cell year_boundary_cell";
+                if (m % 3 === 0) return "month_scale_cell quarter_boundary_cell";
+                return "month_scale_cell month_boundary_cell";
+            },
+            height: 22,
         };
 
-        // 4. Week scale: Savaitė (ISO week number: 36, 37, 38...)
+        // 4. Week scale: Savaitė (ISO week number: 1..52)
+        const weekColWidth = pxPerDay * 7;
         const weekScale = {
             unit: "week",
             step: 1,
-            format: (date) => getISOWeekNumber(date),
-            css: () => "",
+            format: (date) => {
+                if (!canFitWeeks) return "";
+                const w = getISOWeekNumber(date);
+                if (weekColWidth >= 44) {
+                    return `<span title="${w} savaitė">${w} sav.</span>`;
+                }
+                return `<span title="${w} savaitė">${w}</span>`;
+            },
+            css: (date) => canFitWeeks ? "week_scale_cell" : "week_scale_cell no_division_cell",
+            height: 22,
         };
 
-        // Below 50% (< 50%): 4 rows (Year, Quarter, Month, Week). Base unit is WEEK.
-        if (zoom < 50) {
-            g.config.time_step = 1440;
-            g.config.scales = [yearScale, quarterScale, monthScale, weekScale];
-            g.config.scale_height = 88; // 4 rows * 22px = 88px
-
-            let colW = 32;
-            if (zoom === 10) colW = 14;
-            else if (zoom === 15) colW = 18;
-            else if (zoom === 20) colW = 24;
-            else if (zoom === 35) colW = 32;
-
-            g.config.min_column_width = customColWidth ? Math.max(12, customColWidth) : colW;
-            return;
-        }
-
-        // Minute timescale (>= 600%): 5 rows (Year, Month, Day, Hour, Minute). Base unit is MINUTE.
-        if (zoom >= 600) {
-            g.config.time_step = 15;
-            const minuteStep = 15;
-            const minuteColWidth = 32;
-
-            const dayScaleMinute = {
-                unit: "day",
-                step: 1,
-                format: (date) => {
-                    const d = date.getDate();
-                    const wd = LITHUANIAN_WEEKDAYS_SHORT[date.getDay()];
-                    const hol = getLithuanianHoliday(date);
-                    if (hol) {
-                        return `<span class="holiday_day_cell" title="${hol}">★${d} (${wd})</span>`;
-                    }
-                    return `${d} (${wd})`;
-                },
-                css: (date) => {
-                    const today = new Date();
-                    if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
-                        return "today_scale_cell";
-                    }
-                    if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                    if (isWeekend(date)) return "weekend_scale_cell";
-                    return "";
-                },
-            };
-
-            const hourScaleMinute = {
-                unit: "hour",
-                step: 1,
-                format: (date) => {
-                    const h = date.getHours();
-                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-                    return `${pad(h)}:00`;
-                },
-                css: (date) => {
-                    const h = date.getHours();
-                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
-                        return "work_hour_scale_cell";
-                    }
-                    return "off_hour_scale_cell";
-                },
-            };
-
-            const minuteScale = {
-                unit: "minute",
-                step: minuteStep,
-                format: (date) => {
-                    const m = date.getMinutes();
-                    // Display intervals as 15, 30, 45, 60 as requested
-                    const mark = ((m + 15) % 60) === 0 ? 60 : (m + 15);
-                    return `${mark}`;
-                },
-                css: (date) => {
-                    const h = date.getHours();
-                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
-                        return "work_hour_scale_cell";
-                    }
-                    return "off_hour_scale_cell";
-                },
-            };
-
-            g.config.scales = [yearScale, monthScale, dayScaleMinute, hourScaleMinute, minuteScale];
-            g.config.scale_height = 110;
-            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : minuteColWidth;
-            return;
-        }
-
-        // Hourly timescale (>= 300%): 5 rows (Year, Month, Week, Day, Hour). Base unit is HOUR.
-        if (zoom >= 300) {
-            g.config.time_step = (zoom === 300 ? 120 : 60);
-
-            const hourStep = zoom === 300 ? 2 : 1;
-            const hourColWidth = zoom === 300 ? 44 : (zoom === 400 ? 40 : 60);
-
-            const dayScaleHourly = {
-                unit: "day",
-                step: 1,
-                format: (date) => {
-                    const d = date.getDate();
-                    const wd = LITHUANIAN_WEEKDAYS_SHORT[date.getDay()];
-                    const hol = getLithuanianHoliday(date);
-                    if (hol) {
-                        return `<span class="holiday_day_cell" title="${hol}">★${d} (${wd})</span>`;
-                    }
-                    return `${d} (${wd})`;
-                },
-                css: (date) => {
-                    const today = new Date();
-                    if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
-                        return "today_scale_cell";
-                    }
-                    if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                    if (isWeekend(date)) return "weekend_scale_cell";
-                    return "";
-                },
-            };
-
-            const hourScale = {
-                unit: "hour",
-                step: hourStep,
-                format: (date) => {
-                    const h = date.getHours();
-                    const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
-                    return `${pad(h)}:00`;
-                },
-                css: (date) => {
-                    const h = date.getHours();
-                    if (h >= 8 && h <= 17 && !isWeekend(date) && !getLithuanianHoliday(date)) {
-                        return "work_hour_scale_cell";
-                    }
-                    return "off_hour_scale_cell";
-                },
-            };
-
-            g.config.scales = [yearScale, monthScale, weekScale, dayScaleHourly, hourScale];
-            g.config.scale_height = 110; // 5 rows * 22px = 110px
-            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : hourColWidth;
-            return;
-        }
-
-        // Zoom >= 50% and < 300%: 5 rows (Year, Quarter, Month, Week, Day). Base unit is DAY.
-        g.config.time_step = 1440;
+        // 5. Day scale: Uniform holiday styling with NO star (★), native title tooltip on hover, format "14 Tr" or "14"
+        const canFitWeekdays = pxPerDay >= 40;
         const dayScale = {
             unit: "day",
             step: 1,
             format: (date) => {
+                if (!canFitDays) return "";
                 const d = date.getDate();
-                if (zoom >= 100) {
-                    const hol = getLithuanianHoliday(date);
-                    if (hol) {
-                        return `<span class="holiday_day_cell" title="${hol}">★${d}</span>`;
-                    }
+                const hol = getLithuanianHoliday(date);
+                const wd = canFitWeekdays ? ` ${LITHUANIAN_WEEKDAYS_SHORT[date.getDay()]}` : "";
+                if (hol) {
+                    return `<span class="holiday_day_cell" title="${hol}">${d}${wd}</span>`;
                 }
-                return d;
+                const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                const fullDateTitle = `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(d)}`;
+                return `<span title="${fullDateTitle}">${d}${wd}</span>`;
             },
             css: (date) => {
+                if (!canFitDays) return "day_scale_cell no_division_cell";
+                const d = date.getDate();
+                const m = date.getMonth();
+                const classes = ["day_scale_cell"];
                 const today = new Date();
-                if (date.getDate() === today.getDate() && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear()) {
-                    return "today_scale_cell";
+                if (d === today.getDate() && m === today.getMonth() && date.getFullYear() === today.getFullYear()) {
+                    classes.push("today_scale_cell");
                 }
-                if (getLithuanianHoliday(date)) return "holiday_scale_cell";
-                if (isWeekend(date)) return "weekend_scale_cell";
-                return "";
+                const hol = getLithuanianHoliday(date);
+                if (hol) classes.push("holiday_scale_cell");
+                else if (!this.isWorkingDay(date)) classes.push("weekend_scale_cell");
+
+                if (m === 0 && d === 1) classes.push("year_boundary_cell");
+                else if (d === 1 && m % 3 === 0) classes.push("quarter_boundary_cell");
+                else if (d === 1) classes.push("month_boundary_cell");
+
+                return classes.join(" ");
             },
+            height: 22,
         };
 
-        g.config.scales = [yearScale, quarterScale, monthScale, weekScale, dayScale];
-        g.config.scale_height = 110; // 5 rows * 22px = 110px
+        // 6. Hour scale: dynamic 1h or 2h step based on available width
+        const canFitHours = pxPerHour >= 11;
+        let hourStep = 1;
+        if (pxPerHour >= 22) {
+            hourStep = 1;
+        } else if (pxPerHour >= 11) {
+            hourStep = 2;
+        }
+        const hourColWidth = Math.max(16, Math.round(pxPerHour * hourStep));
 
-        let colW = 32;
-        if (zoom === 50) colW = 18;
-        else if (zoom === 75) colW = 24;
-        else if (zoom === 100) colW = 32;
-        else if (zoom === 150) colW = 48;
-        else if (zoom === 200) colW = 64;
-        else if (zoom >= 250) colW = 80;
+        const hourScale = {
+            unit: "hour",
+            step: hourStep,
+            format: (date) => {
+                if (!canFitHours) return "";
+                const h = date.getHours();
+                const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                const nextH = (h + hourStep) % 24;
+                const tooltip = `${pad(h)}:00 – ${pad(nextH)}:00`;
+                if (hourColWidth >= 38) {
+                    return `<span title="${tooltip}">${pad(h)}:00</span>`;
+                }
+                return `<span title="${tooltip}">${h}</span>`;
+            },
+            css: (date) => {
+                if (!canFitHours) return "hour_scale_cell no_division_cell";
+                const h = date.getHours();
+                const classes = ["hour_scale_cell"];
+                if (this.isWorkingDateTime(date, hourStep * 60)) {
+                    classes.push("work_hour_scale_cell");
+                } else {
+                    classes.push("off_hour_scale_cell");
+                }
+                if (h === 0) {
+                    classes.push("day_boundary_cell");
+                }
+                return classes.join(" ");
+            },
+            height: 22,
+        };
 
-        g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : colW;
+        // 7. Minute scale: dynamic 1m, 5m, 15m, 30m step based on available width
+        // 95% to 100% is strictly 1-minute resolution (more zoomed out at 95% where 60m fits screen, more zoomed in at 100%)
+        let minStep = 0;
+        if (this.state.zoomLevel >= 95 || pxPerMin >= 15) {
+            minStep = 1; // 1-minute resolution (1..60) at 95% - 100% zoom
+        } else if ((pxPerMin * 5) >= 20) {
+            minStep = 5; // 5-minute resolution (5, 10, 15..60) at 85% - 90% zoom
+        } else if ((pxPerMin * 15) >= 20) {
+            minStep = 15; // 15-minute resolution (15, 30, 45, 60) at 75% - 80% zoom
+        } else if ((pxPerMin * 30) >= 20) {
+            minStep = 30; // 30-minute resolution (30, 60) at 70% zoom
+        }
+
+        const canFitMinutes = minStep > 0;
+        const minuteColWidth = canFitMinutes ? Math.max(14, Math.round(pxPerMin * minStep)) : 14;
+
+        const minuteScale = {
+            unit: "minute",
+            step: minStep || 15,
+            format: (date) => {
+                if (!canFitMinutes) return "";
+                const m = date.getMinutes();
+                const h = date.getHours();
+                const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                const nextM = m + minStep;
+                const endH = nextM >= 60 ? (h + 1) % 24 : h;
+                const endM = nextM % 60;
+                const mark = minStep === 1 ? m : (minuteColWidth >= 28 ? pad(m) : m);
+                return `<span title="${pad(h)}:${pad(m)} – ${pad(endH)}:${pad(endM)}">${mark}</span>`;
+            },
+            css: (date) => {
+                if (!canFitMinutes) return "minute_scale_cell no_division_cell";
+                const m = date.getMinutes();
+                const classes = ["minute_scale_cell"];
+                if (this.isWorkingDateTime(date, minStep || 15)) {
+                    classes.push("work_hour_scale_cell");
+                } else {
+                    classes.push("off_hour_scale_cell");
+                }
+                if (m === 0) {
+                    classes.push("hour_boundary_cell");
+                }
+                return classes.join(" ");
+            },
+            height: 22,
+        };
+
+        // Dynamic Scale Selection: strictly based on whether each time unit fits on screen!
+        let scales = [yearScale, quarterScale, monthScale];
+
+        if (canFitMinutes) {
+            // Minute timescale (70% - 100%): all 7 strips active [Year, Quarter, Month, Week, Day, Hour, Minute]
+            scales = [yearScale, quarterScale, monthScale, weekScale, dayScale, hourScale, minuteScale];
+            g.config.time_step = 1; // 1-minute precision across all minute zoom levels
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : minuteColWidth;
+        } else if (canFitHours) {
+            // Hourly timescale (60% - 65%): 6 strips active [Year, Quarter, Month, Week, Day, Hour]
+            scales = [yearScale, quarterScale, monthScale, weekScale, dayScale, hourScale];
+            g.config.time_step = 15; // 15-minute precision in hourly view
+            g.config.min_column_width = customColWidth ? Math.max(16, customColWidth) : hourColWidth;
+        } else if (canFitDays) {
+            // Daily timescale (30% - 55%): 5 strips active [Year, Quarter, Month, Week, Day]
+            scales = [yearScale, quarterScale, monthScale, weekScale, dayScale];
+            g.config.time_step = 1440;
+            g.config.min_column_width = customColWidth ? Math.max(13, customColWidth) : Math.round(pxPerDay);
+        } else if (canFitWeeks) {
+            // Weekly timescale (15% - 25%): 4 strips active [Year, Quarter, Month, Week]
+            scales = [yearScale, quarterScale, monthScale, weekScale];
+            g.config.time_step = 1440;
+            g.config.min_column_width = customColWidth ? Math.max(14, customColWidth) : Math.round(pxPerDay * 7);
+        } else {
+            // Macro monthly timescale (0% - 10%): 3 strips active [Year, Quarter, Month]
+            scales = [yearScale, quarterScale, monthScale];
+            g.config.time_step = 1440;
+            const defMonthColW = Math.max(14, Math.round(pxPerDay * 30.4375));
+            g.config.min_column_width = customColWidth ? Math.max(14, customColWidth) : defMonthColW;
+        }
+
+        g.config.scales = scales;
+        g.config.duration_unit = "minute";
+        g.config.duration_step = 1;
+        g.config.min_duration = 60 * 1000; // 1 minute (60,000 ms) minimum duration across all scales
+        // Dynamically size header height to exact active scales count * 22px
+        // Eliminates empty white gaps and fake stripes across all zoom levels!
+        g.config.scale_height = scales.length * 22;
     }
 
     /**
      * Fetch and parse timeline data
      */
     async loadTimelineData(customDomain = null) {
+        this.clearHoverHighlight();
         if (!this.gantt) return;
 
         try {
@@ -2230,6 +3808,7 @@ export class GanntLTAction extends Component {
             this.gantt.config.readonly = !canEdit;
             this.gantt.config.drag_move = canEdit;
             this.gantt.config.drag_resize = canEdit;
+            this.gantt.config.drag_project = canEdit;
             this.gantt.config.drag_links = canEdit;
 
             // Preserve scroll position (both in pixel offset and anchor date) and open/closed branch states
@@ -2239,6 +3818,9 @@ export class GanntLTAction extends Component {
                 const visibleWidth = this.getTimelineVisibleWidth();
                 anchorDate = this.gantt.dateFromPos(scrollPos.x + Math.floor(visibleWidth / 2));
             }
+            const savedOpenStates = (this._savedViewState && this._savedViewState.openStates)
+                ? this._savedViewState.openStates
+                : null;
             const openStates = {};
             if (this.gantt.eachTask) {
                 this.gantt.eachTask((t) => {
@@ -2246,15 +3828,37 @@ export class GanntLTAction extends Component {
                 });
             }
 
+            if (this._lastAddedParentId && data.tasks) {
+                let currKey = `task_${this._lastAddedParentId}`;
+                while (currKey) {
+                    openStates[currKey] = true;
+                    if (savedOpenStates) savedOpenStates[currKey] = true;
+                    const found = data.tasks.find((t) => t.id === currKey);
+                    currKey = found ? found.parent : null;
+                }
+                this._lastAddedParentId = null;
+            }
+
             if (data.tasks) {
-                const isHourly = (this.state.zoomLevel >= 300);
+                const zoomLevel = this.state.zoomLevel;
                 for (const t of data.tasks) {
-                    if (openStates[t.id] !== undefined) {
-                        t.open = openStates[t.id];
+                    t.auto_scheduling = false;
+                    if (savedOpenStates && savedOpenStates[t.id] !== undefined) {
+                        t.open = Boolean(savedOpenStates[t.id]);
+                    } else if (openStates[t.id] !== undefined) {
+                        t.open = Boolean(openStates[t.id]);
+                    } else {
+                        t.open = false;
                     }
-                    if (isHourly && t.work_start_date && t.work_end_date) {
-                        t.start_date = t.work_start_date;
-                        t.end_date = t.work_end_date;
+                    if (t.work_start_date && t.work_end_date) {
+                        const { gridStart, gridEnd } = workDatesToVisualGrid(t.work_start_date, t.work_end_date, zoomLevel);
+                        t.start_date = formatOdooDateTime(gridStart);
+                        t.end_date = formatOdooDateTime(gridEnd);
+                        t._established_start = new Date(gridStart);
+                        t._established_end = new Date(gridEnd);
+                        t._established_work_start = t.work_start_date;
+                        t._established_work_end = t.work_end_date;
+                        t._established_alloc_hours = t.allocated_hours;
                     }
                 }
             }
@@ -2298,26 +3902,13 @@ export class GanntLTAction extends Component {
                 });
             } else if (this._projectChanged) {
                 this._projectChanged = false;
-                let firstTaskStart = null;
-                if (data.tasks && data.tasks.length > 0) {
-                    for (const t of data.tasks) {
-                        if (t.start_date) {
-                            const s = new Date(t.start_date);
-                            if (!isNaN(s.getTime()) && (!firstTaskStart || s < firstTaskStart)) {
-                                firstTaskStart = s;
-                            }
-                        }
-                    }
-                }
-                if (firstTaskStart && this.gantt.scrollTo) {
-                    const visibleWidth = this.getTimelineVisibleWidth();
-                    const pos = this.safePosFromDate(firstTaskStart);
-                    if (pos >= 0) {
-                        this.gantt.scrollTo(Math.max(0, pos - Math.floor(visibleWidth / 3)), 0);
-                    }
-                } else {
-                    this.navigateToday();
-                }
+                this.navigateToday(true);
+            } else if (!this._initialScrollDone) {
+                this._initialScrollDone = true;
+                this.navigateToday(true);
+                setTimeout(() => {
+                    this.navigateToday(true);
+                }, 60);
             } else if (anchorDate) {
                 const visibleWidth = this.getTimelineVisibleWidth();
                 const newPos = this.safePosFromDate(anchorDate);
@@ -2329,13 +3920,6 @@ export class GanntLTAction extends Component {
             } else if (scrollPos && (scrollPos.x !== undefined || scrollPos.y !== undefined)) {
                 this.gantt.scrollTo(scrollPos.x, scrollPos.y);
             }
-
-            if (!this._initialScrollDone) {
-                this._initialScrollDone = true;
-                setTimeout(() => {
-                    this.navigateToday();
-                }, 50);
-            }
         } catch (err) {
             console.error("Error loading timeline data", err);
             this.notification.add(_t("Could not load timeline data: ") + err.message, { type: "danger" });
@@ -2343,10 +3927,30 @@ export class GanntLTAction extends Component {
     }
 
     /**
+     * Native Odoo confirmation dialog, resolved as a boolean promise.
+     */
+    askConfirm(body) {
+        return new Promise((resolve) => {
+            this.dialogService.add(
+                ConfirmationDialog,
+                {
+                    title: _t("Patvirtinimas"),
+                    body,
+                    confirmLabel: _t("Ištrinti"),
+                    cancelLabel: _t("Atšaukti"),
+                    confirm: () => resolve(true),
+                    cancel: () => resolve(false),
+                },
+                { onClose: () => resolve(false) }
+            );
+        });
+    }
+
+    /**
      * Open standard Odoo Task Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openTaskFormDialog(taskId) {
-        this.saveViewState();
+        this.saveViewState(true);
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.task",
@@ -2360,6 +3964,20 @@ export class GanntLTAction extends Component {
      * Open dialog to create a new subtask under a parent task
      */
     addSubtaskDialog(parentTaskId, projectId, milestoneId) {
+        let effProjectId = projectId;
+        let effMilestoneId = milestoneId;
+        const taskKey = `task_${parentTaskId}`;
+        if (this.gantt && this.gantt.isTaskExists(taskKey)) {
+            const pTask = this.gantt.getTask(taskKey);
+            if (pTask) {
+                effProjectId = effProjectId || pTask.project_id || undefined;
+                effMilestoneId = effMilestoneId || pTask.milestone_id || undefined;
+            }
+        }
+        effProjectId = effProjectId || (this.state.selectedProjectId > 0 ? this.state.selectedProjectId : undefined);
+
+        this._lastAddedParentId = parentTaskId;
+
         this.actionService.doAction(
             {
                 type: "ir.actions.act_window",
@@ -2368,8 +3986,8 @@ export class GanntLTAction extends Component {
                 target: "new",
                 context: {
                     default_parent_id: parentTaskId,
-                    default_project_id: projectId || this.state.selectedProjectId || undefined,
-                    ...(milestoneId ? { default_milestone_id: milestoneId } : {}),
+                    ...(effProjectId ? { default_project_id: effProjectId } : {}),
+                    ...(effMilestoneId ? { default_milestone_id: effMilestoneId } : {}),
                 },
             },
             {
@@ -2451,7 +4069,7 @@ export class GanntLTAction extends Component {
      * Open standard Odoo Milestone Form (Full view)
      */
     openMilestoneFormDialog(milestoneId) {
-        this.saveViewState();
+        this.saveViewState(true);
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.milestone",
@@ -2465,7 +4083,7 @@ export class GanntLTAction extends Component {
      * Open standard Odoo Project Form (Full view with chatter, normal menus, breadcrumbs)
      */
     openProjectFormDialog(projectId) {
-        this.saveViewState();
+        this.saveViewState(true);
         this.actionService.doAction({
             type: "ir.actions.act_window",
             res_model: "project.project",
@@ -2477,7 +4095,8 @@ export class GanntLTAction extends Component {
 
     /**
      * Ensures the timeline timescale covers today, all tasks, and generous past/future buffers.
-     * Prevents the past from being cut off or unreachable when tasks are moved into the future.
+     * At 10% zoom, guarantees at least 5 years backward and 5 years forward so the 6-year viewport
+     * (3 years backward, 3 years forward from center) is fully visible and horizontally scrollable in both directions.
      */
     ensureTimelineRange(extraTaskStart = null, extraTaskEnd = null) {
         const g = this.gantt;
@@ -2504,26 +4123,38 @@ export class GanntLTAction extends Component {
             }
         }
 
+        const isHighZoom = (this.state.zoomLevel >= 60);
         if (g.eachTask) {
+            const hasFocalSpan = Boolean(extraTaskStart && extraTaskEnd);
+            const focalCenterMs = hasFocalSpan ? Math.round((new Date(extraTaskStart).getTime() + new Date(extraTaskEnd).getTime()) / 2) : 0;
+            const maxFocalDistMs = 35 * 86400000;
+
             g.eachTask((task) => {
                 if (task.start_date) {
                     const s = new Date(task.start_date);
                     if (!isNaN(s.getTime())) {
-                        if (!minDate || s < minDate) minDate = s;
-                        if (!maxDate || s > maxDate) maxDate = s;
+                        if (!isHighZoom || !hasFocalSpan || Math.abs(s.getTime() - focalCenterMs) <= maxFocalDistMs) {
+                            if (!minDate || s < minDate) minDate = s;
+                            if (!maxDate || s > maxDate) maxDate = s;
+                        }
                     }
                 }
                 if (task.end_date) {
                     const e = new Date(task.end_date);
                     if (!isNaN(e.getTime())) {
-                        if (!minDate || e < minDate) minDate = e;
-                        if (!maxDate || e > maxDate) maxDate = e;
+                        if (!isHighZoom || !hasFocalSpan || Math.abs(e.getTime() - focalCenterMs) <= maxFocalDistMs) {
+                            if (!minDate || e < minDate) minDate = e;
+                            if (!maxDate || e > maxDate) maxDate = e;
+                        }
                     }
                 }
-                if (task.deadline_end) {
+                if (task.has_deadline_delay && task.deadline_end) {
+                    // The red tail ends at the deadline: keep it inside the visible scale so it is never clipped.
                     const dl = task.deadline_end instanceof Date ? task.deadline_end : new Date(String(task.deadline_end).replace(/-/g, "/"));
                     if (!isNaN(dl.getTime())) {
-                        if (!maxDate || dl > maxDate) maxDate = dl;
+                        if (!isHighZoom || !hasFocalSpan || Math.abs(dl.getTime() - focalCenterMs) <= maxFocalDistMs) {
+                            if (!maxDate || dl > maxDate) maxDate = dl;
+                        }
                     }
                 }
             });
@@ -2532,10 +4163,9 @@ export class GanntLTAction extends Component {
         if (!minDate) minDate = new Date(today);
         if (!maxDate) maxDate = new Date(today);
 
-        // Include today in boundaries if appropriate (for high zoom >= 300%, only if today is within 21 days of tasks to avoid immense column bloat)
+        // Include today in boundaries if appropriate (for high zoom >= 250%, only if today is within 21 days of tasks to avoid immense column bloat)
         let effectiveMin = new Date(minDate);
         let effectiveMax = new Date(maxDate);
-        const isHighZoom = (this.state.zoomLevel >= 300);
         const distFromToday = Math.min(
             Math.abs(today.getTime() - minDate.getTime()),
             Math.abs(today.getTime() - maxDate.getTime())
@@ -2549,41 +4179,30 @@ export class GanntLTAction extends Component {
             }
         }
 
+        const visibleWidth = this.getTimelineVisibleWidth();
+        const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, visibleWidth);
+        const canFitDays = pxPerDay >= 13;
+        const isHourlyOrMinute = (pxPerDay / 24) >= 12;
+
         let startDate;
         let endDate;
 
-        if (this.state.zoomLevel >= 600) {
-            // Minute zoom (600%): 3 days past, 7 days future buffer for high performance
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 3, 0, 0, 0);
+        if (this.state.zoomLevel >= 90) {
+            // Ultra-micro zoom (1-minute / 5-minute resolution): tight 1 day past, 2 days future buffer
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 1, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 2, 23, 59, 59);
+        } else if (this.state.zoomLevel >= 60 || isHourlyOrMinute) {
+            // Hourly / 15-minute zoom: 4 days past, 7 days future buffer
+            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 4, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 7, 23, 59, 59);
-        } else if (this.state.zoomLevel >= 300) {
-            // Hourly zoom (300% - 500%): 7 days past, 14 days future buffer for high performance
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth(), effectiveMin.getDate() - 7, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth(), effectiveMax.getDate() + 14, 23, 59, 59);
-        } else if (this.state.zoomLevel <= 15) {
-            // Extreme zoom (10% - 15%): Multi-year buffer
+        } else if (!canFitDays) {
+            // Macro multi-year zoom (0% - 30%): 5 years backward, 5 years forward strictly aligned to Jan 1
+            startDate = new Date(effectiveMin.getFullYear() - 5, 0, 1, 0, 0, 0);
+            endDate = new Date(effectiveMax.getFullYear() + 5, 11, 31, 23, 59, 59);
+        } else {
+            // Detailed daily zoom (35% - 55%): 1 year backward, 2 years forward strictly aligned to Jan 1
             startDate = new Date(effectiveMin.getFullYear() - 1, 0, 1, 0, 0, 0);
             endDate = new Date(effectiveMax.getFullYear() + 2, 11, 31, 23, 59, 59);
-        } else if (this.state.zoomLevel < 35) {
-            // 20%: Multi-year buffer
-            startDate = new Date(effectiveMin.getFullYear() - 1, 0, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear() + 1, 11, 31, 23, 59, 59);
-        } else if (this.state.zoomLevel < 50) {
-            // 35%: 1-2 years buffer
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 2, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 4, 0, 23, 59, 59);
-        } else {
-            // Detailed zoom (>= 50% and < 300%): Days buffer
-            startDate = new Date(effectiveMin.getFullYear(), effectiveMin.getMonth() - 1, 1, 0, 0, 0);
-            endDate = new Date(effectiveMax.getFullYear(), effectiveMax.getMonth() + 3, 0, 23, 59, 59);
-        }
-
-        // For zoom < 50% (unit: week), align startDate to Monday to avoid half-week cuts
-        if (this.state.zoomLevel < 50) {
-            const dayOfWeek = startDate.getDay();
-            const diffToMon = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
-            startDate.setDate(startDate.getDate() + diffToMon);
-            startDate.setHours(0, 0, 0, 0);
         }
 
         g.config.start_date = startDate;
@@ -2602,8 +4221,18 @@ export class GanntLTAction extends Component {
         try {
             const oldStart = new Date(g.config.start_date);
             const newStart = new Date(oldStart);
-            const stepYears = this.state.zoomLevel < 35 ? 2 : 1;
-            newStart.setFullYear(newStart.getFullYear() - stepYears);
+            const visibleWidth = this.getTimelineVisibleWidth();
+            const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, visibleWidth);
+            const canFitDays = pxPerDay >= 13;
+            if (pxPerDay >= 350) {
+                const stepDays = pxPerDay >= 2000 ? 1 : 3;
+                newStart.setDate(newStart.getDate() - stepDays);
+            } else {
+                const stepYears = !canFitDays ? 2 : 1;
+                newStart.setFullYear(newStart.getFullYear() - stepYears);
+                newStart.setMonth(0, 1);
+                newStart.setHours(0, 0, 0, 0);
+            }
 
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
             g.config.start_date = newStart;
@@ -2630,8 +4259,18 @@ export class GanntLTAction extends Component {
         try {
             const oldEnd = new Date(g.config.end_date);
             const newEnd = new Date(oldEnd);
-            const stepYears = this.state.zoomLevel < 35 ? 2 : 1;
-            newEnd.setFullYear(newEnd.getFullYear() + stepYears);
+            const visibleWidth = this.getTimelineVisibleWidth();
+            const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, visibleWidth);
+            const canFitDays = pxPerDay >= 13;
+            if (pxPerDay >= 350) {
+                const stepDays = pxPerDay >= 2000 ? 1 : 3;
+                newEnd.setDate(newEnd.getDate() + stepDays);
+            } else {
+                const stepYears = !canFitDays ? 2 : 1;
+                newEnd.setFullYear(newEnd.getFullYear() + stepYears);
+                newEnd.setMonth(11, 31);
+                newEnd.setHours(23, 59, 59);
+            }
 
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
             g.config.end_date = newEnd;
@@ -2657,7 +4296,7 @@ export class GanntLTAction extends Component {
         let marker = dataArea.querySelector(".custom_today_marker");
         try {
             const today = new Date();
-            if (this.state.zoomLevel < 300) {
+            if (this.state.zoomLevel < 60) {
                 today.setHours(12, 0, 0, 0);
             }
             const leftPos = this.safePosFromDate(today);
@@ -2667,8 +4306,9 @@ export class GanntLTAction extends Component {
                     marker.className = "custom_today_marker";
                     dataArea.appendChild(marker);
                 }
-                const monthNameGen = LITHUANIAN_MONTHS_GENITIVE[today.getMonth()];
-                marker.innerHTML = `<span class="today_marker_label">ŠIANDIEN (${monthNameGen} ${today.getDate()} d.)</span>`;
+                const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+                const todayStr = `${today.getFullYear()}.${pad(today.getMonth() + 1)}.${pad(today.getDate())}`;
+                marker.innerHTML = `<span class="today_marker_label">${todayStr}</span>`;
                 marker.style.left = `${leftPos}px`;
                 marker.style.height = `${Math.max(dataArea.offsetHeight, dataArea.scrollHeight)}px`;
                 marker.style.display = "block";
@@ -2733,7 +4373,6 @@ export class GanntLTAction extends Component {
     async onProjectChange(e) {
         this.state.selectedProjectId = parseInt(e.target.value);
         this._projectChanged = true;
-        this.saveViewState();
         await this.loadTimelineData();
     }
 
@@ -2757,106 +4396,186 @@ export class GanntLTAction extends Component {
         }
 
         this._isZooming = true;
+        this.clearHoverHighlight();
 
         try {
             const visibleWidth = this.getTimelineVisibleWidth();
             const scrollState = g.getScrollState ? g.getScrollState() : { x: 0, y: 0 };
-            const targetScrollY = (customScrollY !== null && customScrollY !== undefined) ? customScrollY : scrollState.y;
+            let targetScrollY = (customScrollY !== null && customScrollY !== undefined) ? customScrollY : scrollState.y;
 
-            // 1. Identify focal anchor (Task or Date)
-            let focalTask = null;
+            // Define comfortable left margin so the focal item or visible date has breathing room (~60-80px)
+            const leftMargin = Math.min(80, Math.max(40, Math.round(visibleWidth * 0.06)));
+
             let focalDate = (customFocalDate instanceof Date && !isNaN(customFocalDate.getTime())) ? customFocalDate : null;
+            let focalOffset = (typeof customFocalOffset === "number" && !isNaN(customFocalOffset)) ? customFocalOffset : null;
 
-            // Check if user has an active/selected task
-            const selectedId = g.getSelectedId ? g.getSelectedId() : null;
-            if (selectedId && g.isTaskExists(selectedId)) {
-                focalTask = g.getTask(selectedId);
+            // 1. If explicit itemSpan is provided (e.g. from fitToScreen), anchor to itemSpan.minStart
+            if (!focalDate && itemSpan && itemSpan.minStart instanceof Date) {
+                focalDate = new Date(itemSpan.minStart);
+                focalOffset = leftMargin;
             }
 
-            // If no selected task, find the task visible closest to the horizontal center of the viewport
-            if (!focalTask && g.eachTask) {
-                const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
-                let closestDist = Infinity;
-                g.eachTask((t) => {
-                    if (!t || t.type === "project") return;
-                    const pos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(t) : null;
-                    if (pos && pos.left !== undefined) {
-                        const tCenter = pos.left + (pos.width / 2);
-                        if (pos.left + pos.width >= scrollState.x - 50 && pos.left <= scrollState.x + visibleWidth + 50) {
-                            const dist = Math.abs(tCenter - currentCenterPx);
-                            if (dist < closestDist) {
-                                closestDist = dist;
-                                focalTask = t;
+            // 2. If zooming rapidly via +/- keys or buttons, reuse the active anchor
+            if (!focalDate && this._zoomAnchorDate && this._zoomResetTimer) {
+                focalDate = new Date(this._zoomAnchorDate);
+                focalOffset = (typeof this._zoomAnchorOffset === "number") ? this._zoomAnchorOffset : leftMargin;
+            }
+
+            // 3. Smart Anchor Selection: Selected Task (Priority 1) -> Visible Task / Today (Priority 2) -> Left Viewport Date (Priority 3)
+            if (!focalDate && !itemSpan) {
+                let selectedTask = null;
+                const selectedId = g.getSelectedId ? g.getSelectedId() : null;
+                if (selectedId && g.isTaskExists(selectedId)) {
+                    selectedTask = g.getTask(selectedId);
+                }
+
+                if (selectedTask) {
+                    const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(selectedTask) : null;
+                    const isTaskVisible = taskPos && (
+                        (taskPos.left + (taskPos.width || 0)) >= (scrollState.x - 100) &&
+                        taskPos.left <= (scrollState.x + visibleWidth + 100)
+                    );
+
+                    if (isTaskVisible) {
+                        let taskStart = parseWorkDateStr(selectedTask.work_start_date) || (selectedTask.start_date ? new Date(selectedTask.start_date) : null);
+                        // If selected item is a parent with children, encompass earliest child start
+                        if (typeof g.getChildren === "function") {
+                            const encompassStart = (pId) => {
+                                const children = g.getChildren(pId) || [];
+                                for (const cId of children) {
+                                    const child = g.getTask(cId);
+                                    if (child) {
+                                        const cs = parseWorkDateStr(child.work_start_date) || (child.start_date ? new Date(child.start_date) : null);
+                                        if (cs && (!taskStart || cs < taskStart)) {
+                                            taskStart = cs;
+                                        }
+                                        encompassStart(cId);
+                                    }
+                                }
+                            };
+                            encompassStart(selectedTask.id);
+                        }
+
+                        if (taskStart instanceof Date && !isNaN(taskStart.getTime())) {
+                            focalDate = taskStart;
+                            focalOffset = leftMargin;
+                            if (taskPos && taskPos.top !== undefined && customScrollY === null) {
+                                targetScrollY = Math.max(0, taskPos.top - 80);
                             }
                         }
                     }
-                });
-            }
+                }
 
-            // If a focal task was identified, determine anchor date
-            if (focalTask) {
-                if (level >= 300 && focalTask.work_start_date) {
-                    const ws = new Date(focalTask.work_start_date.replace(/-/g, "/"));
-                    if (!isNaN(ws.getTime())) {
-                        focalDate = ws;
+                // Priority 2: No task selected. Find the earliest task currently visible in the viewport or Today!
+                if (!focalDate) {
+                    const viewLeft = scrollState.x;
+                    const viewRight = scrollState.x + visibleWidth;
+                    let bestCandidateDate = null;
+                    let minOffsetFromLeft = Infinity;
+
+                    if (g.eachTask) {
+                        g.eachTask((t) => {
+                            const sDate = parseWorkDateStr(t.work_start_date) || (t.start_date ? new Date(t.start_date) : null);
+                            const eDate = parseWorkDateStr(t.work_end_date) || (t.end_date ? new Date(t.end_date) : null);
+                            if (!sDate || isNaN(sDate.getTime())) return;
+
+                            const sPx = this.safePosFromDate(sDate);
+                            const ePx = eDate ? this.safePosFromDate(eDate) : sPx;
+                            if (sPx < 0 && ePx < 0) return;
+
+                            // Check if task bar intersects the visible horizontal viewport
+                            if (ePx >= viewLeft - 20 && sPx <= viewRight + 20) {
+                                const dist = (sPx >= viewLeft) ? (sPx - viewLeft) : Math.abs(viewLeft - sPx) * 2;
+                                if (dist < minOffsetFromLeft) {
+                                    minOffsetFromLeft = dist;
+                                    bestCandidateDate = sDate;
+                                }
+                            }
+                        });
+                    }
+
+                    // Check if Today marker is visible in the viewport
+                    const today = new Date();
+                    if (this.state.zoomLevel < 60) today.setHours(12, 0, 0, 0);
+                    const todayPx = this.safePosFromDate(today);
+                    if (todayPx >= viewLeft - 20 && todayPx <= viewRight + 20) {
+                        const todayDist = Math.max(0, todayPx - viewLeft);
+                        if (!bestCandidateDate || todayDist <= minOffsetFromLeft) {
+                            bestCandidateDate = today;
+                        }
+                    }
+
+                    if (bestCandidateDate instanceof Date && !isNaN(bestCandidateDate.getTime())) {
+                        focalDate = bestCandidateDate;
+                        focalOffset = leftMargin;
                     }
                 }
-                if (!focalDate && focalTask.start_date) {
-                    focalDate = new Date(focalTask.start_date);
+
+                // Priority 3: Fallback only if no tasks and no Today are on screen
+                if (!focalDate && g.dateFromPos) {
+                    const leftVisiblePx = scrollState.x + leftMargin;
+                    const leftDate = g.dateFromPos(leftVisiblePx);
+                    if (leftDate instanceof Date && !isNaN(leftDate.getTime())) {
+                        focalDate = leftDate;
+                        focalOffset = leftMargin;
+                    }
                 }
-            } else if (itemSpan && itemSpan.minStart instanceof Date && !isNaN(itemSpan.minStart.getTime())) {
-                focalDate = itemSpan.minStart;
-            } else if (!focalDate && g.dateFromPos) {
-                const currentCenterPx = scrollState.x + Math.floor(visibleWidth / 2);
-                const centerDate = g.dateFromPos(currentCenterPx);
-                if (centerDate instanceof Date && !isNaN(centerDate.getTime())) {
-                    focalDate = centerDate;
+
+                // Cache anchor for rapid +/- clicking or keyboard bursts
+                if (focalDate) {
+                    this._zoomAnchorDate = new Date(focalDate);
+                    this._zoomAnchorOffset = focalOffset;
                 }
             }
+
+            if (this._zoomResetTimer) {
+                clearTimeout(this._zoomResetTimer);
+            }
+            this._zoomResetTimer = setTimeout(() => {
+                this._zoomAnchorDate = null;
+                this._zoomAnchorOffset = null;
+                this._zoomResetTimer = null;
+            }, 600);
 
             if (!focalDate) {
                 focalDate = new Date();
+                focalOffset = leftMargin;
+            }
+            if (focalOffset === null) {
+                focalOffset = leftMargin;
             }
 
-            const wasHourly = (this.state.zoomLevel >= 300);
-            const isHourly = (level >= 300);
-
-            // 2. Apply the new zoom level and reconfigure scale & range
+            // 4. Apply the new zoom level and reconfigure scale & range
             this.state.zoomLevel = level;
             this.applyScaleConfig();
 
-            // Seamless transition between daily and hourly view task rendering
-            if (wasHourly !== isHourly && g.eachTask) {
+            // Seamless transition of task visual grid coordinates across all zoom levels (10% to 600%)
+            if (g.eachTask) {
                 g.eachTask((t) => {
-                    if (isHourly) {
-                        if (t.work_start_date && t.work_end_date) {
-                            t.start_date = new Date(t.work_start_date.replace(/-/g, "/"));
-                            t.end_date = new Date(t.work_end_date.replace(/-/g, "/"));
-                            if (t.end_date <= t.start_date) {
-                                t.end_date = new Date(t.start_date.getTime() + 3600000);
-                            }
+                    if (t.work_start_date && t.work_end_date) {
+                        const { gridStart, gridEnd } = workDatesToVisualGrid(t.work_start_date, t.work_end_date, level);
+                        t.start_date = gridStart;
+                        t.end_date = gridEnd;
+                        if (t._established_work_start && t._established_work_end) {
+                            const estGrid = workDatesToVisualGrid(t._established_work_start, t._established_work_end, level);
+                            t._established_start = estGrid.gridStart;
+                            t._established_end = estGrid.gridEnd;
+                        } else {
+                            t._established_start = new Date(gridStart);
+                            t._established_end = new Date(gridEnd);
                         }
-                    } else {
-                        const s = t.work_start_date ? new Date(t.work_start_date.replace(/-/g, "/")) : new Date(t.start_date);
-                        const e = t.work_end_date ? new Date(t.work_end_date.replace(/-/g, "/")) : new Date(t.end_date);
-                        t.start_date = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0);
-                        let endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-                        if (e.getHours() > 0 || e.getMinutes() > 0 || endDay.getTime() === t.start_date.getTime()) {
-                            endDay.setDate(endDay.getDate() + 1);
-                        }
-                        t.end_date = new Date(endDay.getFullYear(), endDay.getMonth(), endDay.getDate(), 0, 0, 0);
+                        g.updateTask(t.id);
                     }
-                    g.updateTask(t.id);
                 });
             }
 
             this.ensureTimelineRange(
-                (itemSpan && itemSpan.minStart) ? itemSpan.minStart : (focalTask && focalTask.start_date ? focalTask.start_date : focalDate),
-                (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : (focalTask && focalTask.end_date ? focalTask.end_date : focalDate)
+                (itemSpan && itemSpan.minStart) ? itemSpan.minStart : focalDate,
+                (itemSpan && itemSpan.maxEnd) ? itemSpan.maxEnd : focalDate
             );
             g.render();
 
-            // 3. Center viewport smoothly around focalTask, focalDate, itemSpan, or cursor anchor
+            // 5. Keep the viewport anchored on focalDate at focalOffset without jumping
             const applyScroll = () => {
                 if (!g.scrollTo) return;
                 const curVisWidth = this.getTimelineVisibleWidth();
@@ -2864,29 +4583,25 @@ export class GanntLTAction extends Component {
                 if (itemSpan && itemSpan.minStart && itemSpan.maxEnd) {
                     const sPx = this.safePosFromDate(itemSpan.minStart);
                     const ePx = this.safePosFromDate(itemSpan.maxEnd);
-                    if (sPx >= 0 && ePx >= sPx) {
-                        const spanW = ePx - sPx;
-                        const margin = Math.max(30, Math.floor((curVisWidth - spanW) / 2));
-                        const targetScrollX = Math.max(0, Math.round(sPx - margin));
-                        g.scrollTo(targetScrollX, targetScrollY);
+                    let finalY = targetScrollY;
+                    if (itemSpan.targetId && g.isTaskExists(itemSpan.targetId) && typeof g.getTaskPosition === "function") {
+                        const tObj = g.getTask(itemSpan.targetId);
+                        const tPos = g.getTaskPosition(tObj);
+                        if (tPos && tPos.top !== undefined) {
+                            finalY = Math.max(0, tPos.top - 80);
+                        }
+                    }
+
+                    if (sPx >= 0) {
+                        // Align item starting from left side (~60px margin) so the item bar expands smoothly from left to right without jarring center jumping
+                        const leftMargin = Math.min(80, Math.max(40, Math.round(curVisWidth * 0.06)));
+                        const targetScrollX = Math.max(0, Math.round(sPx - leftMargin));
+                        g.scrollTo(targetScrollX, finalY);
                         this.renderTodayMarker();
                         return;
-                    }
-                }
-
-                if (focalTask && g.isTaskExists(focalTask.id)) {
-                    const updatedTask = g.getTask(focalTask.id);
-                    const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(updatedTask) : null;
-                    if (taskPos && taskPos.left !== undefined) {
-                        const taskCenter = taskPos.left + (taskPos.width / 2);
-                        const offset = (typeof customFocalOffset === "number" && !isNaN(customFocalOffset))
-                            ? customFocalOffset
-                            : Math.floor(curVisWidth / 2);
-                        const targetScrollX = Math.max(0, Math.round(taskCenter - offset));
-                        const finalScrollY = (customScrollY !== null && customScrollY !== undefined)
-                            ? customScrollY
-                            : (taskPos.top !== undefined ? Math.max(0, taskPos.top - 80) : targetScrollY);
-                        g.scrollTo(targetScrollX, finalScrollY);
+                    } else if (focalDate && g.showDate) {
+                        g.showDate(focalDate);
+                        g.scrollTo(undefined, finalY);
                         this.renderTodayMarker();
                         return;
                     }
@@ -2895,11 +4610,10 @@ export class GanntLTAction extends Component {
                 if (focalDate) {
                     const newPos = this.safePosFromDate(focalDate);
                     if (newPos >= 0) {
-                        const offset = (typeof customFocalOffset === "number" && !isNaN(customFocalOffset))
-                            ? customFocalOffset
-                            : Math.floor(curVisWidth / 2);
-                        const targetScrollX = Math.max(0, Math.round(newPos - offset));
+                        const targetScrollX = Math.max(0, Math.round(newPos - focalOffset));
                         g.scrollTo(targetScrollX, targetScrollY);
+                    } else if (g.showDate) {
+                        g.showDate(focalDate);
                     }
                 }
                 this.renderTodayMarker();
@@ -2911,9 +4625,11 @@ export class GanntLTAction extends Component {
                 applyScroll();
                 setTimeout(() => {
                     applyScroll();
-                    this._isZooming = false;
-                    this.saveViewState();
-                }, 80);
+                    setTimeout(() => {
+                        applyScroll();
+                        this._isZooming = false;
+                    }, 50);
+                }, 50);
             });
         } catch (err) {
             console.error("Error setting zoom:", err);
@@ -2928,11 +4644,13 @@ export class GanntLTAction extends Component {
         if (this.ganttElement && this.ganttElement.el) {
             const taskContainer = this.ganttElement.el.querySelector(".gantt_task");
             if (taskContainer && taskContainer.clientWidth > 50) {
+                setTimelineViewportWidth(taskContainer.clientWidth);
                 return taskContainer.clientWidth;
             }
             const totalWidth = this.ganttElement.el.clientWidth;
             const gridWidth = (this.gantt && this.gantt.config && this.gantt.config.grid_width) || 440;
             if (totalWidth > gridWidth + 50) {
+                setTimelineViewportWidth(totalWidth - gridWidth);
                 return totalWidth - gridWidth;
             }
         }
@@ -2942,44 +4660,114 @@ export class GanntLTAction extends Component {
     /**
      * Centers the viewport directly on today's red line marker.
      */
-    navigateToday() {
+    navigateToday(resetVerticalScroll = false) {
         if (!this.gantt) return;
         const g = this.gantt;
         const today = new Date();
-        today.setHours(12, 0, 0, 0);
+        if (this.state.zoomLevel < 60) {
+            today.setHours(12, 0, 0, 0);
+        }
 
-        // Ensure today is within timeline range
-        const state = g.getState ? g.getState() : {};
-        if (!state.min_date || !state.max_date || today < state.min_date || today > state.max_date) {
+        this._zoomAnchorDate = null;
+        this._zoomAnchorOffset = null;
+        if (this._zoomResetTimer) {
+            clearTimeout(this._zoomResetTimer);
+            this._zoomResetTimer = null;
+        }
+
+        // Always ensure today is well within the timeline range with sufficient margin to view
+        let todayPx = this.safePosFromDate(today);
+        if (todayPx < 80) {
             this.ensureTimelineRange(today, today);
             g.render();
         }
 
-        const scrollAndCenter = () => {
+        const scrollAndAlignLeft = () => {
             this.renderTodayMarker();
-            const visibleWidth = this.getTimelineVisibleWidth();
-            const todayPx = this.safePosFromDate(today);
+            const curVisWidth = this.getTimelineVisibleWidth();
+            const curTodayPx = this.safePosFromDate(today);
 
-            if (todayPx >= 0 && g.scrollTo) {
-                const targetX = Math.max(0, Math.round(todayPx - visibleWidth / 2));
+            if (curTodayPx >= 0 && g.scrollTo) {
+                // Position Today marker on the left side (~80px margin) so the user sees Today on the left and future timeline on the right
+                const leftMargin = Math.min(80, Math.max(40, Math.round(curVisWidth * 0.08)));
+                const targetX = Math.max(0, Math.round(curTodayPx - leftMargin));
                 const scrollState = g.getScrollState ? g.getScrollState() : { y: 0 };
-                g.scrollTo(targetX, scrollState.y);
+                const targetY = (resetVerticalScroll === true) ? 0 : scrollState.y;
+                g.scrollTo(targetX, targetY);
             } else if (g.showDate) {
                 g.showDate(today);
             }
         };
 
-        scrollAndCenter();
+        scrollAndAlignLeft();
         requestAnimationFrame(() => {
-            scrollAndCenter();
-            setTimeout(scrollAndCenter, 50);
+            scrollAndAlignLeft();
+            setTimeout(scrollAndAlignLeft, 50);
         });
+    }
+
+    /**
+     * Resets the view to the default overview: 40% scale, all items collapsed (Suskleisti), centered on Today.
+     */
+    resetView() {
+        if (!this.gantt) return;
+        const g = this.gantt;
+        this._isZooming = true;
+        this._zoomAnchorDate = null;
+        this._zoomAnchorOffset = null;
+        if (this._zoomResetTimer) {
+            clearTimeout(this._zoomResetTimer);
+            this._zoomResetTimer = null;
+        }
+
+        try {
+            if (g.unselectTask) {
+                g.unselectTask();
+            }
+            this.state.zoomLevel = DEFAULT_OVERVIEW_ZOOM;
+            this.applyScaleConfig();
+
+            if (g.eachTask) {
+                g.eachTask((task) => {
+                    task.$open = false;
+                    task.open = false;
+                    if (task.work_start_date && task.work_end_date) {
+                        const { gridStart, gridEnd } = workDatesToVisualGrid(
+                            task.work_start_date,
+                            task.work_end_date,
+                            DEFAULT_OVERVIEW_ZOOM
+                        );
+                        task.start_date = gridStart;
+                        task.end_date = gridEnd;
+                        if (task._established_work_start && task._established_work_end) {
+                            const estGrid = workDatesToVisualGrid(task._established_work_start, task._established_work_end, DEFAULT_OVERVIEW_ZOOM);
+                            task._established_start = estGrid.gridStart;
+                            task._established_end = estGrid.gridEnd;
+                        } else {
+                            task._established_start = new Date(gridStart);
+                            task._established_end = new Date(gridEnd);
+                        }
+                    }
+                });
+            }
+
+            const today = new Date();
+            today.setHours(12, 0, 0, 0);
+            this.ensureTimelineRange(today, today);
+            g.render();
+            this.navigateToday(true);
+        } finally {
+            setTimeout(() => {
+                this._isZooming = false;
+            }, 80);
+        }
     }
 
     expandAll() {
         if (this.gantt) {
             this.gantt.eachTask((task) => {
                 task.$open = true;
+                task.open = true;
             });
             this.gantt.render();
         }
@@ -2989,16 +4777,17 @@ export class GanntLTAction extends Component {
         if (this.gantt) {
             this.gantt.eachTask((task) => {
                 task.$open = false;
+                task.open = false;
             });
             this.gantt.render();
         }
     }
 
     /**
-     * Fit selected task/project/milestone or entire timeline to screen (Pritaikyti ekrane).
-     * If a task, subtask, milestone or project is selected, fits that item's span to the screen.
-     * Selects the best standard zoom level from ZOOM_STEPS based on visible screen width so the item fits horizontally,
-     * and centers the item in the viewport.
+     * Fit selected sidebar item (project, milestone, task, or sub-subtask) to the timeline screen.
+     * Calculates the item's true working span across candidate zoom levels (600% down to 10%)
+     * and selects the highest zoom level where the bar fits comfortably inside ~65% of the viewport width,
+     * centering horizontally on the item's bar and vertically on its row.
      */
     fitToScreen(targetId = null) {
         if (!this.gantt) return;
@@ -3016,92 +4805,80 @@ export class GanntLTAction extends Component {
             }
         }
 
-        let minStart = null;
-        let maxEnd = null;
-
-        if (targetTask && targetTask.start_date && targetTask.end_date) {
-            minStart = new Date(targetTask.start_date);
-            maxEnd = new Date(targetTask.end_date);
-            if (targetTask.deadline_end) {
-                const tdl = targetTask.deadline_end instanceof Date ? targetTask.deadline_end : new Date(String(targetTask.deadline_end).replace(/-/g, "/"));
-                if (!isNaN(tdl.getTime()) && tdl > maxEnd) maxEnd = tdl;
-            }
-            // If it's a project or parent task with children, encompass all descendants
-            const encompassDescendants = (parentId) => {
-                const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
-                for (const childId of children) {
-                    const child = g.getTask(childId);
-                    if (child) {
-                        if (child.start_date) {
-                            const cs = new Date(child.start_date);
-                            if (!minStart || cs < minStart) minStart = cs;
-                        }
-                        if (child.end_date) {
-                            const ce = new Date(child.end_date);
-                            if (!maxEnd || ce > maxEnd) maxEnd = ce;
-                        }
-                        if (child.deadline_end) {
-                            const cdl = child.deadline_end instanceof Date ? child.deadline_end : new Date(String(child.deadline_end).replace(/-/g, "/"));
-                            if (!isNaN(cdl.getTime()) && cdl > maxEnd) maxEnd = cdl;
-                        }
-                        encompassDescendants(childId);
-                    }
-                }
-            };
-            encompassDescendants(targetTask.id);
-        } else {
-            // No task selected: encompass all tasks across the entire timeline
-            if (g.eachTask) {
-                g.eachTask((t) => {
-                    if (t.start_date) {
-                        const s = new Date(t.start_date);
-                        if (!minStart || s < minStart) minStart = s;
-                    }
-                    if (t.end_date) {
-                        const e = new Date(t.end_date);
-                        if (!maxEnd || e > maxEnd) maxEnd = e;
-                    }
-                    if (t.deadline_end) {
-                        const tdl = t.deadline_end instanceof Date ? t.deadline_end : new Date(String(t.deadline_end).replace(/-/g, "/"));
-                        if (!isNaN(tdl.getTime()) && tdl > maxEnd) maxEnd = tdl;
-                    }
-                });
-            }
-        }
-
-        if (!minStart || !maxEnd) {
+        if (!targetTask) {
+            this.resetView();
             return;
         }
 
-        const durationMs = Math.max(900000, maxEnd.getTime() - minStart.getTime()); // minimum 15 min
-        const durationDays = durationMs / 86400000.0;
+        let minWorkStart = parseWorkDateStr(targetTask.work_start_date) || new Date(targetTask.start_date);
+        let maxWorkEnd = parseWorkDateStr(targetTask.work_end_date) || new Date(targetTask.end_date);
+        let maxDeadlineEnd = null;
 
-        // Dynamically find the best matching zoom level from predefined ZOOM_STEPS based on visible width:
-        // Constrain the item's duration to at most 70% of visibleWidth so there is balanced margin on both sides
+        if (targetTask.has_deadline_delay && targetTask.deadline_end) {
+            const tdl = parseWorkDateStr(targetTask.deadline_end);
+            if (tdl) maxDeadlineEnd = tdl;
+        }
+
+        // Encompass all descendants if targetTask is a project, milestone, or parent task
+        const encompassDescendants = (parentId) => {
+            const children = (typeof g.getChildren === "function" ? g.getChildren(parentId) : []) || [];
+            for (const childId of children) {
+                const child = g.getTask(childId);
+                if (child) {
+                    const cs = parseWorkDateStr(child.work_start_date) || (child.start_date ? new Date(child.start_date) : null);
+                    const ce = parseWorkDateStr(child.work_end_date) || (child.end_date ? new Date(child.end_date) : null);
+                    if (cs && (!minWorkStart || cs < minWorkStart)) minWorkStart = cs;
+                    if (ce && (!maxWorkEnd || ce > maxWorkEnd)) maxWorkEnd = ce;
+                    if (child.has_deadline_delay && child.deadline_end) {
+                        const cdl = parseWorkDateStr(child.deadline_end);
+                        if (cdl && (!maxDeadlineEnd || cdl > maxDeadlineEnd)) maxDeadlineEnd = cdl;
+                    }
+                    encompassDescendants(childId);
+                }
+            }
+        };
+        encompassDescendants(targetTask.id);
+
+        if (!minWorkStart || !maxWorkEnd || isNaN(minWorkStart.getTime()) || isNaN(maxWorkEnd.getTime())) {
+            return;
+        }
+
+        // Find the highest zoom level from ZOOM_STEPS where the item's visual bar fits within the visible viewport width
         const visibleWidth = this.getTimelineVisibleWidth();
-        const targetMaxPx = Math.max(200, Math.floor(visibleWidth * 0.70));
+        const targetMaxPx = Math.max(150, Math.min(visibleWidth - 100, Math.floor(visibleWidth * 0.88)));
         const candidateZooms = [...ZOOM_STEPS].reverse();
         let bestZoom = ZOOM_STEPS[0];
+
         for (const z of candidateZooms) {
-            const pxPerDay = ZOOM_PX_PER_DAY[z] || 32;
-            const estimatedPx = durationDays * pxPerDay;
+            const { gridStart, gridEnd } = workDatesToVisualGrid(minWorkStart, maxWorkEnd, z);
+            const effEnd = (maxDeadlineEnd && maxDeadlineEnd > gridEnd) ? maxDeadlineEnd : gridEnd;
+            const spanDays = Math.max(0.01, (effEnd.getTime() - gridStart.getTime()) / 86400000.0);
+            const pxPerDay = getZoomPxPerDay(z, visibleWidth);
+            const estimatedPx = spanDays * pxPerDay;
             if (estimatedPx <= targetMaxPx) {
                 bestZoom = z;
                 break;
             }
         }
 
+        const fittedGrid = workDatesToVisualGrid(minWorkStart, maxWorkEnd, bestZoom);
+        const minStart = fittedGrid.gridStart;
+        const maxEnd = (maxDeadlineEnd && maxDeadlineEnd > fittedGrid.gridEnd) ? maxDeadlineEnd : fittedGrid.gridEnd;
+
         let targetY = null;
-        if (targetTask) {
-            if (g.selectTask) g.selectTask(targetTask.id);
-            const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(targetTask) : null;
-            if (taskPos && taskPos.top !== undefined) {
-                targetY = Math.max(0, taskPos.top - 80);
-            }
+        if (g.selectTask) g.selectTask(targetTask.id);
+        const taskPos = (typeof g.getTaskPosition === "function") ? g.getTaskPosition(targetTask) : null;
+        if (taskPos && taskPos.top !== undefined) {
+            targetY = Math.max(0, taskPos.top - 80);
         }
 
-        // Apply standard zoom level centered on the item span with balanced margins
-        this.setZoom(bestZoom, null, targetY, { minStart, maxEnd });
+        this._zoomAnchorDate = null;
+        this._zoomAnchorOffset = null;
+        if (this._zoomResetTimer) {
+            clearTimeout(this._zoomResetTimer);
+            this._zoomResetTimer = null;
+        }
+        this.setZoom(bestZoom, null, targetY, { minStart, maxEnd, targetId: targetTask.id });
     }
 
     /**

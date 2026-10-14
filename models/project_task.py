@@ -5,9 +5,52 @@ from odoo.tools.sql import column_exists, create_column
 from odoo.tools.misc import format_datetime
 from markupsafe import Markup
 import logging
+import math
 import pytz
 
 _logger = logging.getLogger(__name__)
+
+
+def floor_minute(dt):
+    """Drops seconds/microseconds (15:00:43 -> 15:00:00)."""
+    return dt.replace(second=0, microsecond=0) if isinstance(dt, datetime) else dt
+
+
+def ceil_minutes_between(start, end):
+    """
+    Whole minutes between two datetimes, always rounded UP and never less than 1:
+    15 min 43 s -> 16 min, 15 s -> 1 min.
+    """
+    seconds = max(0.0, (end - start).total_seconds())
+    return max(1, int(math.ceil(seconds / 60.0 - 1e-9)))
+
+
+def format_duration_minutes(total_min):
+    """Human duration from minutes: '16 min', '1 val. 5 min', '2 d. 3 val.'"""
+    total_min = int(max(0, round(total_min)))
+    if total_min < 60:
+        return f"{total_min} min"
+    days, rem = divmod(total_min, 1440)
+    hours, mins = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} d.")
+    if hours:
+        parts.append(f"{hours} val.")
+    if mins and not days:
+        parts.append(f"{mins} min")
+    return " ".join(parts) or "0 min"
+
+
+def format_hours_label(hours):
+    """Compact label for allocated hours: '16 min', '8h', '1h 30min' (instead of '0.1h')."""
+    if not hours or hours <= 0:
+        return ""
+    total_min = max(1, int(round(hours * 60)))
+    if total_min < 60:
+        return f"{total_min} min"
+    h, m = divmod(total_min, 60)
+    return f"{h}h" if m == 0 else f"{h}h {m}min"
 
 
 def get_user_tz(env):
@@ -27,9 +70,6 @@ def utc_to_local_dt(env, dt):
     if not dt:
         return dt
     if not isinstance(dt, datetime):
-        return dt
-    # Legacy timestamps saved directly as 08:00:00 or 17:00:00 naive UTC stay on the same calendar day
-    if dt.second == 0 and dt.minute == 0 and dt.hour in (8, 17):
         return dt
     user_tz = get_user_tz(env)
     utc_dt = pytz.utc.localize(dt) if dt.tzinfo is None else dt.astimezone(pytz.utc)
@@ -197,6 +237,20 @@ class ProjectTask(models.Model):
         precompute=True,
         copy=False,
     )
+    plan_is_auto = fields.Boolean(
+        string="Automatinis planas / Auto plan",
+        copy=False,
+        default=False,
+        help="Planned dates were derived by the system (timer actual work, or the span of subtasks) "
+             "instead of being typed by a user. Such a plan follows the real work and never shows a red tail.",
+    )
+    deadline_is_auto = fields.Boolean(
+        string="Automatinis terminas / Auto deadline",
+        copy=False,
+        default=False,
+        help="The deadline was written by the system because work went past the planned end. "
+             "The system may update or clear it; a user typed deadline is never erased.",
+    )
 
     @api.depends("date_assign")
     def _compute_planned_date_start(self):
@@ -237,6 +291,7 @@ class ProjectTask(models.Model):
 
     def _auto_init(self):
         cr = self.env.cr
+        first_install = not column_exists(cr, "project_task", "planned_date_end")
         if not column_exists(cr, "project_task", "planned_date_start"):
             create_column(cr, "project_task", "planned_date_start", "timestamp")
             cr.execute("""
@@ -252,33 +307,45 @@ class ProjectTask(models.Model):
                 WHERE planned_date_end IS NULL
                 AND COALESCE(planned_date_start, date_end, date_deadline) <= COALESCE(date_end, date_deadline)
             """)
-        # Heal parent tasks whose planned_date_end was smaller than their subtasks' planned_date_end
-        cr.execute("""
-            UPDATE project_task p
-            SET planned_date_end = sub.max_end,
-                planned_date_start = LEAST(COALESCE(p.planned_date_start, sub.min_start), sub.min_start)
-            FROM (
-                SELECT parent_id,
-                       MIN(planned_date_start) AS min_start,
-                       MAX(planned_date_end) AS max_end
-                FROM project_task
-                WHERE parent_id IS NOT NULL AND active = TRUE
-                GROUP BY parent_id
-            ) sub
-            WHERE p.id = sub.parent_id
-              AND sub.max_end IS NOT NULL
-              AND (p.planned_date_end IS NULL OR p.planned_date_end < sub.max_end)
-        """)
-        # Clear redundant auto-copied date_deadline values that equal or precede planned_date_end
-        cr.execute("""
-            UPDATE project_task
-            SET date_deadline = NULL
-            WHERE date_deadline IS NOT NULL
-              AND planned_date_end IS NOT NULL
-              AND date_deadline <= planned_date_end
-              AND (state IS NULL OR state != '1_done')
-        """)
-        return super()._auto_init()
+        if first_install:
+            # One-time initial sync of parent task spans to their subtasks. Must NOT run on every
+            # upgrade, otherwise it would overwrite parent dates that users set deliberately.
+            cr.execute("""
+                UPDATE project_task p
+                SET planned_date_end = sub.max_end,
+                    planned_date_start = sub.min_start
+                FROM (
+                    SELECT parent_id,
+                           MIN(planned_date_start) AS min_start,
+                           MAX(planned_date_end) AS max_end
+                    FROM project_task
+                    WHERE parent_id IS NOT NULL AND active = TRUE
+                      AND planned_date_start IS NOT NULL AND planned_date_end IS NOT NULL
+                    GROUP BY parent_id
+                ) sub
+                WHERE p.id = sub.parent_id
+                  AND (p.planned_date_end IS DISTINCT FROM sub.max_end OR p.planned_date_start IS DISTINCT FROM sub.min_start)
+            """)
+        # NOTE: date_deadline is user data and must never be wiped automatically.
+        flags_new = not column_exists(cr, "project_task", "plan_is_auto")
+        res = super()._auto_init()
+        if flags_new:
+            # One-time: parents that were previously synced to the exact span of their subtasks are 'auto plan'.
+            cr.execute("""
+                UPDATE project_task p
+                SET plan_is_auto = TRUE
+                FROM (
+                    SELECT parent_id, MIN(planned_date_start) AS min_start, MAX(planned_date_end) AS max_end
+                    FROM project_task
+                    WHERE parent_id IS NOT NULL AND active = TRUE
+                      AND planned_date_start IS NOT NULL AND planned_date_end IS NOT NULL
+                    GROUP BY parent_id
+                ) sub
+                WHERE p.id = sub.parent_id
+                  AND p.planned_date_start = sub.min_start
+                  AND p.planned_date_end = sub.max_end
+            """)
+        return res
 
     timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
     first_timer_start = fields.Datetime("Pirmo starto laikas / First Timer Start", readonly=True, copy=False)
@@ -300,7 +367,7 @@ class ProjectTask(models.Model):
 
     def action_timer_start(self):
         self.ensure_one()
-        if self.is_timer_running:
+        if self.is_timer_running or self.state in ("1_done", "1_canceled"):
             return False
         now = fields.Datetime.now()
         eff_sec = int(round((self.effective_hours or 0.0) * 3600))
@@ -316,17 +383,19 @@ class ProjectTask(models.Model):
         if (not self.timer_total_seconds or self.timer_total_seconds < eff_sec) and eff_sec > 0:
             vals["timer_total_seconds"] = eff_sec
 
-        # If task has NO pre-planned schedule (no planned_date_end set):
-        # Update planned_date_start to when timer actually started (first_timer_start or now),
-        # so it doesn't hold an old task creation date from days/weeks ago!
-        if not self.planned_date_end:
-            vals["planned_date_start"] = self.first_timer_start or now
-        elif not self.planned_date_start or self.planned_date_start > now:
-            vals["planned_date_start"] = now
+        # R1: no manual plan -> the plan is derived from the real work (start = first timer start).
+        # A manual plan (typed by a user) is NEVER moved by the timer.
+        manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
+        if not manual_plan:
+            start_f = floor_minute(vals.get("first_timer_start") or self.first_timer_start or now)
+            vals["planned_date_start"] = start_f
+            vals["plan_is_auto"] = True
+            if self.planned_date_end and self.planned_date_end < start_f:
+                vals["planned_date_end"] = False  # stale end of an old auto plan; rewritten on Pause/Finish
 
         if self.state in ("04_waiting_normal", "draft"):
             vals["state"] = "01_in_progress"
-        self.write(vals)
+        self.with_context(gannt_auto_plan=True).write(vals)
 
         user_name = self.env.user.name
         time_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm:ss")
@@ -352,6 +421,8 @@ class ProjectTask(models.Model):
 
     def action_timer_finish(self):
         self.ensure_one()
+        if self.state == "1_done" and not self.is_timer_running:
+            return True
         now = fields.Datetime.now()
         user_name = self.env.user.name
 
@@ -362,7 +433,8 @@ class ProjectTask(models.Model):
         if self.is_timer_running and self.timer_start:
             diff_sec = max(0, int((now - self.timer_start).total_seconds()))
             cur_total_sec += diff_sec
-            elapsed_hours = max(0.01, round(diff_sec / 3600.0, 2)) if diff_sec > 0 else 0.0
+            elapsed_min = max(1, int(math.ceil(diff_sec / 60.0 - 1e-9)))
+            elapsed_hours = elapsed_min / 60.0
             emp = self.env.user.employee_id
             if not emp and "hr.employee" in self.env:
                 emp = self.env["hr.employee"].search([("user_id", "=", self.env.uid)], limit=1)
@@ -389,7 +461,7 @@ class ProjectTask(models.Model):
             rem_sec = diff_sec % 60
             dur_str = f"{mins} min. {rem_sec} sek." if mins > 0 else f"{diff_sec} sek."
             self.message_post(
-                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_hours} val. ({dur_str})."),
+                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_min} min. (faktiškai {dur_str})."),
                 subtype_xmlid="mail.mt_note",
             )
 
@@ -401,46 +473,9 @@ class ProjectTask(models.Model):
             "progress": 1.0,  # Mark as 100% complete
         }
 
-        # 2. Date and Allocation logic:
-        # Check if the task had a pre-planned schedule (i.e. planned_date_end was set before finishing)
-        had_preplanned_schedule = bool(self.planned_date_end)
-        p_end = self.planned_date_end
-        date_late = False
-        late_hours = 0.0
-
-        if not had_preplanned_schedule:
-            # Case A: Task had NO pre-planned schedule
-            # Start date = actual work start (first_timer_start or start time of work)
-            # End date = when user clicked Baigti (now)
-            # Allocated hours = actual time spent (so Allocated Time matches reality at 100%)
-            start_cand = self.first_timer_start or self.planned_date_start
-            if not start_cand or (start_cand.date() < now.date() and cur_total_sec < 86400):
-                start_cand = now - timedelta(seconds=max(60, cur_total_sec))
-
-            vals["planned_date_start"] = start_cand
-            vals["planned_date_end"] = now
-            vals["date_deadline"] = False
-            spent_hours = max(0.01, round(cur_total_sec / 3600.0, 2))
-            vals["allocated_hours"] = spent_hours
-        else:
-            # Case B: Task HAD a pre-planned schedule (e.g. planned in advance by manager or on timeline)
-            if now <= p_end:
-                # Finished within planned date: update actual ending date to now and ensure no false delay
-                vals["planned_date_end"] = now
-                if self.date_deadline and self.date_deadline <= p_end:
-                    vals["date_deadline"] = False
-            else:
-                # Finished after planned date (timer surpassed planned date!):
-                # Keep planned_date_end as the planned date, and set date_deadline to now so vėlavimas is shown!
-                vals["date_deadline"] = now
-                date_late = True
-                late_hours = round((now - p_end).total_seconds() / 3600.0, 1)
-
-        # Ensure start date is never after end date
-        final_start = vals.get("planned_date_start", self.planned_date_start)
-        final_end = vals.get("planned_date_end", self.planned_date_end)
-        if final_start and final_end and final_start > final_end:
-            vals["planned_date_start"] = final_end
+        # 2. Plan / deadline logic (R1 / R2), see _work_stop_vals
+        stop_vals, info = self._work_stop_vals(now, cur_total_sec, finished=True)
+        vals.update(stop_vals)
 
         # Auto-move to "Atlikta / Done" Kanban stage if present
         if self.project_id:
@@ -454,25 +489,86 @@ class ProjectTask(models.Model):
             if done_stage:
                 vals["stage_id"] = done_stage.id
 
-        self.write(vals)
+        self.with_context(gannt_auto_plan=True).write(vals)
         self._propagate_deadline_upward()
 
         # 3. Post finish note to Chatter
         now_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm")
         finish_msg = f"🏁 <b>Užduotis baigta (Task Finished):</b> {user_name} pažymėjo užduotį kaip atliktą (100%).<br/>"
-        if not had_preplanned_schedule:
-            s_str = format_user_datetime(self.env, vals['planned_date_start'], "yyyy-MM-dd HH:mm")
-            spent_h = vals['allocated_hours']
-            mins_tot = cur_total_sec // 60
-            finish_msg += f"⏱️ <b>Faktinė trukmė užfiksuota:</b> Nuo {s_str} iki {now_str} (~{mins_tot} min., {spent_h} val.)."
-        elif date_late:
-            p_end_str = format_user_datetime(self.env, p_end, "yyyy-MM-dd HH:mm")
-            finish_msg += f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> Planuota pabaiga: {p_end_str}, Naujas terminas / faktinė pabaiga: {now_str} (viršyta ~{late_hours} val.). Laiko juostoje rodomas vėlavimo indikatorius."
+        if info["mode"] == "auto":
+            s_str = format_user_datetime(self.env, vals["planned_date_start"], "yyyy-MM-dd HH:mm")
+            e_str = format_user_datetime(self.env, vals["planned_date_end"], "yyyy-MM-dd HH:mm")
+            finish_msg += (
+                f"⏱️ <b>Faktinė trukmė užfiksuota:</b> nuo {s_str} iki {e_str} "
+                f"({format_duration_minutes(info['plan_minutes'])})."
+            )
+        elif info["late_min"]:
+            p_end_str = format_user_datetime(self.env, info["planned_end"], "yyyy-MM-dd HH:mm")
+            finish_msg += (
+                f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> planuota pabaiga {p_end_str}, "
+                f"faktinė pabaiga {now_str}. Vėlavimas: <b>{format_duration_minutes(info['late_min'])}</b>. "
+                f"Terminas atnaujintas, laiko juostoje rodoma raudona uodega."
+            )
+            if info["extended_manual"]:
+                old_str = format_user_datetime(self.env, info["old_deadline"], "yyyy-MM-dd HH:mm")
+                finish_msg += f"<br/>Ankstesnis terminas ({old_str}) buvo pratęstas."
         else:
-            finish_msg += f"✨ <b>Užbaigta laiku:</b> Pabaigos data atnaujinta į {now_str}."
+            finish_msg += f"✨ <b>Užbaigta laiku:</b> Užduotis baigta {now_str}."
 
         self.message_post(body=Markup(finish_msg), subtype_xmlid="mail.mt_note")
         return True
+
+    def _work_stop_vals(self, now, total_sec, finished):
+        """
+        Single place that decides how the plan / deadline change when work stops (Pause or Finish).
+
+        R1  no MANUAL plan  -> the plan is the real work: start = first timer start (minute),
+            end = start + whole minutes (always rounded UP, min 1 min). Never a red tail.
+        R2  manual plan     -> the plan is untouched. If work went past the planned end the
+            deadline = planned end + overrun minutes (rounded UP, min 1 min) flagged auto;
+            the timeline draws the red tail planned end -> deadline.
+
+        Returns (vals, info).
+        """
+        self.ensure_one()
+        vals = {}
+        info = {"mode": "auto", "late_min": 0, "plan_minutes": 0, "planned_end": self.planned_date_end,
+                "extended_manual": False, "old_deadline": self.date_deadline}
+        manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
+
+        if not manual_plan:
+            start = self.first_timer_start or (now - timedelta(seconds=max(60, total_sec or 0)))
+            if start > now:
+                start = now
+            start_f = floor_minute(start)
+            minutes = ceil_minutes_between(start, now)
+            vals["planned_date_start"] = start_f
+            vals["planned_date_end"] = start_f + timedelta(minutes=minutes)
+            vals["plan_is_auto"] = True
+            info["plan_minutes"] = minutes
+            if finished:
+                vals["allocated_hours"] = max(1, int(math.ceil((total_sec or 0) / 60.0 - 1e-9))) / 60.0
+            if self.deadline_is_auto and self.date_deadline:
+                vals["date_deadline"] = False
+                vals["deadline_is_auto"] = False
+            return vals, info
+
+        info["mode"] = "planned"
+        p_end = self.planned_date_end
+        if now > p_end:
+            over = ceil_minutes_between(p_end, now)
+            new_dl = p_end + timedelta(minutes=over)
+            cur_dl = self.date_deadline
+            info["late_min"] = over
+            if not cur_dl or self.deadline_is_auto or cur_dl < new_dl:
+                vals["date_deadline"] = new_dl
+                vals["deadline_is_auto"] = True
+                info["extended_manual"] = bool(cur_dl and not self.deadline_is_auto and cur_dl < new_dl)
+        elif self.deadline_is_auto and self.date_deadline:
+            # Finished inside the plan: an earlier auto-written deadline is no longer true.
+            vals["date_deadline"] = False
+            vals["deadline_is_auto"] = False
+        return vals, info
 
     def action_timer_reopen(self):
         self.ensure_one()
@@ -522,98 +618,88 @@ class ProjectTask(models.Model):
                     child.sudo().write(child_vals)
                     child._cascade_clear_downstream_progress()
 
-    def _clear_or_cap_descendant_deadlines(self, target_dl):
+    def _recompute_container(self):
         """
-        When a user explicitly clears or lowers date_deadline on a parent task in the Form View,
-        clears or caps any descendant subtask deadlines so the parent deadline stays reverted.
+        R3. Keeps one parent task consistent with its direct subtasks:
+          * parent with an AUTO plan (or no plan): plan = span of the subtasks (never a red tail by itself);
+          * parent with a MANUAL plan: the plan is never touched. If a subtask needs more time than the parent,
+            the parent gets an auto deadline = latest subtask end (planned end or deadline) -> red tail.
         """
-        for task in self:
-            for child in task.child_ids:
-                if child.date_deadline:
-                    if not target_dl:
-                        child.with_context(skip_hierarchy_propagation=True).sudo().write({"date_deadline": False})
-                    else:
-                        c_dl = child.date_deadline if isinstance(child.date_deadline, datetime) else datetime.combine(child.date_deadline, time(17, 0, 0))
-                        t_dl = target_dl if isinstance(target_dl, datetime) else datetime.combine(target_dl, time(17, 0, 0))
-                        if c_dl > t_dl:
-                            child.with_context(skip_hierarchy_propagation=True).sudo().write({"date_deadline": target_dl})
-                if child.child_ids:
-                    child._clear_or_cap_descendant_deadlines(target_dl)
+        self.ensure_one()
+        children = self.child_ids.filtered(lambda c: c.active)
+        if not children:
+            return
+        starts, ends, eff_ends = [], [], []
+        for c in children:
+            c_s = c.planned_date_start or c.date_assign or c.create_date
+            if c_s:
+                starts.append(c_s)
+            c_e = c.planned_date_end
+            if not c_e and c_s:
+                c_s_loc = utc_to_local_dt(self.env, c_s)
+                c_e = local_to_utc_dt(self.env, datetime.combine(c_s_loc.date(), time(17, 0, 0)))
+            if c_e:
+                ends.append(c_e)
+                eff = c_e
+                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c_e:
+                    eff = c.date_deadline
+                eff_ends.append(eff)
+
+        vals = {}
+        manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
+        if not manual_plan and starts and ends:
+            min_s, max_e = min(starts), max(ends)
+            if max_e < min_s:
+                min_s = max_e
+            if self.planned_date_start != min_s:
+                vals["planned_date_start"] = min_s
+            if self.planned_date_end != max_e:
+                vals["planned_date_end"] = max_e
+            if not self.plan_is_auto:
+                vals["plan_is_auto"] = True
+            eff_s = vals.get("planned_date_start", self.planned_date_start)
+            eff_e = vals.get("planned_date_end", self.planned_date_end)
+            if (
+                ("planned_date_start" in vals or "planned_date_end" in vals)
+                and eff_s and eff_e
+            ):
+                w_h = calculate_lithuanian_working_hours(utc_to_local_dt(self.env, eff_s), utc_to_local_dt(self.env, eff_e))
+                if w_h > 0:
+                    vals["allocated_hours"] = w_h
+
+        p_end = vals.get("planned_date_end", self.planned_date_end)
+        tail_end = max(eff_ends) if eff_ends else None
+        cur_dl = self.date_deadline
+        if p_end and tail_end and tail_end > p_end:
+            if not cur_dl or self.deadline_is_auto or cur_dl < tail_end:
+                if cur_dl != tail_end or not self.deadline_is_auto:
+                    vals["date_deadline"] = tail_end
+                    vals["deadline_is_auto"] = True
+        elif self.deadline_is_auto and cur_dl and not self.first_timer_start:
+            # Subtasks no longer overflow the parent: the system-written tail goes away.
+            vals["date_deadline"] = False
+            vals["deadline_is_auto"] = False
+
+        if vals:
+            try:
+                self.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).sudo().write(vals)
+            except Exception as e:
+                _logger.warning("Could not update container task %s: %s", self.id, e)
 
     def _propagate_deadline_upward(self):
         """
-        Propagates child task planned dates (planned_date_start, planned_date_end) up the parent task
-        hierarchy so parent containers always expand/contract to encompass their subtasks without
-        creating fake deadline delays (vėlavimas).
-        Only propagates date_deadline upward if a child task actually has a genuine delay
-        (date_deadline > planned_date_end).
+        Re-evaluates the task itself (if it has subtasks) and every ancestor (see _recompute_container),
+        then the milestone span.
         """
         if self.env.context.get("skip_hierarchy_propagation"):
             return
         for rec in self:
-            # 1. Propagate up the parent task hierarchy
+            # 1. The task itself (when it is a container) and every ancestor, bottom-up
+            if rec.child_ids:
+                rec._recompute_container()
             curr_parent = rec.parent_id
             while curr_parent:
-                children = curr_parent.child_ids.filtered(lambda c: c.active)
-                if children:
-                    sub_starts = []
-                    sub_ends = []
-                    for c in children:
-                        c_s = c.planned_date_start or c.date_assign or c.create_date
-                        if c_s:
-                            sub_starts.append(c_s)
-                        c_e = c.planned_date_end
-                        if not c_e and c_s:
-                            c_s_loc = utc_to_local_dt(self.env, c_s)
-                            c_e = local_to_utc_dt(self.env, datetime.combine(c_s_loc.date(), time(17, 0, 0)))
-                        if c_e:
-                            sub_ends.append(c_e)
-                    p_vals = {}
-                    if sub_starts:
-                        min_s = min(sub_starts)
-                        if not curr_parent.planned_date_start or min_s != curr_parent.planned_date_start:
-                            p_vals["planned_date_start"] = min_s
-                    if sub_ends:
-                        max_e = max(sub_ends)
-                        if not curr_parent.planned_date_end or max_e != curr_parent.planned_date_end:
-                            p_vals["planned_date_end"] = max_e
-                            eff_s_chk = p_vals.get("planned_date_start", curr_parent.planned_date_start)
-                            if eff_s_chk and max_e < eff_s_chk:
-                                p_vals["planned_date_start"] = min(sub_starts) if sub_starts else max_e
-
-                    # Check if any child has a genuine deadline delay (date_deadline > planned_date_end)
-                    delayed_child_dls = []
-                    for c in children:
-                        if c.date_deadline:
-                            c_dl = c.date_deadline if isinstance(c.date_deadline, datetime) else datetime.combine(c.date_deadline, time(17, 0, 0))
-                            c_end = c.planned_date_end
-                            if c_end and utc_to_local_dt(self.env, c_dl).date() > utc_to_local_dt(self.env, c_end).date():
-                                delayed_child_dls.append(c_dl)
-
-                    eff_p_end = p_vals.get("planned_date_end", curr_parent.planned_date_end)
-                    if delayed_child_dls:
-                        max_dl = max(delayed_child_dls)
-                        if not curr_parent.date_deadline or curr_parent.date_deadline < max_dl:
-                            p_vals["date_deadline"] = max_dl
-                    elif curr_parent.date_deadline and eff_p_end:
-                        p_dl_local = utc_to_local_dt(self.env, curr_parent.date_deadline)
-                        p_end_local = utc_to_local_dt(self.env, eff_p_end)
-                        if p_dl_local.date() <= p_end_local.date():
-                            p_vals["date_deadline"] = False
-
-                    if p_vals:
-                        eff_s = p_vals.get("planned_date_start", curr_parent.planned_date_start)
-                        eff_e = p_vals.get("planned_date_end", curr_parent.planned_date_end)
-                        if eff_s and eff_e:
-                            s_loc = utc_to_local_dt(self.env, eff_s)
-                            e_loc = utc_to_local_dt(self.env, eff_e)
-                            w_h = calculate_lithuanian_working_hours(s_loc, e_loc)
-                            if w_h > 0:
-                                p_vals["allocated_hours"] = w_h
-                        try:
-                            curr_parent.with_context(skip_hierarchy_propagation=True).sudo().write(p_vals)
-                        except Exception:
-                            pass
+                curr_parent._recompute_container()
                 curr_parent = curr_parent.parent_id
 
             # 2. Propagate to milestone
@@ -631,8 +717,6 @@ class ProjectTask(models.Model):
                     max_ms_e = max(ms_ends)
                     if not ms.planned_date_end or max_ms_e > ms.planned_date_end:
                         ms_vals["planned_date_end"] = max_ms_e
-                        if not ms.deadline or ms.deadline < max_ms_e:
-                            ms_vals["deadline"] = max_ms_e
                 if ms_vals:
                     try:
                         ms.sudo().write(ms_vals)
@@ -701,10 +785,23 @@ class ProjectTask(models.Model):
         return records
 
     def write(self, vals):
-        self._normalize_form_datetime_vals(vals)
+        auto_ctx = bool(self.env.context.get("gannt_auto_plan"))
+        if not auto_ctx:
+            self._normalize_form_datetime_vals(vals)
+
+        # A user (form, timeline drag) typing planned dates / a deadline makes them MANUAL.
+        # Internal system writes pass context gannt_auto_plan and keep their own flags.
+        if not auto_ctx:
+            if ("planned_date_start" in vals or "planned_date_end" in vals) and "plan_is_auto" not in vals:
+                vals["plan_is_auto"] = False
+            if "date_deadline" in vals and "deadline_is_auto" not in vals:
+                vals["deadline_is_auto"] = False
 
         # Auto-update allocated_hours from working hours (darbo valandos) if dates are modified
-        if ("planned_date_start" in vals or "planned_date_end" in vals or "date_deadline" in vals) and "allocated_hours" not in vals:
+        if (
+            ("planned_date_start" in vals or "planned_date_end" in vals or ("date_deadline" in vals and not auto_ctx))
+            and "allocated_hours" not in vals
+        ):
             for rec in self:
                 s_val = vals.get("planned_date_start") if "planned_date_start" in vals else rec.planned_date_start
                 e_val = vals.get("planned_date_end") if "planned_date_end" in vals else (rec.planned_date_end or (vals.get("date_deadline") if "date_deadline" in vals else rec.date_deadline))
@@ -721,25 +818,19 @@ class ProjectTask(models.Model):
                         pass
                 break
 
-        # If planned_date_end is updated in the form and covers an existing date_deadline, clear stale deadline
-        if "planned_date_end" in vals and vals["planned_date_end"] and "date_deadline" not in vals and not self.env.context.get("from_timeline_batch"):
-            try:
-                new_e_dt = fields.Datetime.to_datetime(vals["planned_date_end"]) if isinstance(vals["planned_date_end"], str) else vals["planned_date_end"]
-                new_e_local = utc_to_local_dt(self.env, new_e_dt)
-                for rec in self:
-                    if rec.date_deadline:
-                        dl_local = utc_to_local_dt(self.env, rec.date_deadline)
-                        if dl_local.date() <= new_e_local.date():
-                            vals["date_deadline"] = False
-                            break
-            except Exception:
-                pass
-
         res = super().write(vals)
 
-        # If user explicitly cleared or changed date_deadline on a parent task, sync descendants so it stays reverted
-        if "date_deadline" in vals and not self.env.context.get("from_timeline_batch") and not self.env.context.get("skip_hierarchy_propagation"):
-            self._clear_or_cap_descendant_deadlines(vals.get("date_deadline"))
+        # An auto-written deadline is only true while the plan ends BEFORE it. When the plan end was moved
+        # (form / timeline drag-resize) up to or past it, the system clears it. Typed deadlines are never touched.
+        if not auto_ctx and ("planned_date_end" in vals or "planned_date_start" in vals):
+            for rec in self:
+                if (
+                    rec.deadline_is_auto and rec.date_deadline and rec.planned_date_end
+                    and rec.planned_date_end >= rec.date_deadline
+                ):
+                    rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).write(
+                        {"date_deadline": False, "deadline_is_auto": False}
+                    )
 
         # Parent task and Milestone hierarchy propagation
         if ("date_deadline" in vals or "planned_date_start" in vals or "planned_date_end" in vals or "parent_id" in vals or "milestone_id" in vals) and not self.env.context.get("skip_hierarchy_propagation"):
@@ -786,10 +877,28 @@ class ProjectTask(models.Model):
         projects = project_model.browse([])
         tasks = task_model.browse([])
 
-        if domain:
+        # Clean domain for timeline: remove flat-view restrictions (display_in_project, parent_id=False)
+        # so all subtasks and nested children to unlimited depth are loaded in the tree
+        def _clean_timeline_domain(dom):
+            if not dom:
+                return []
+            cleaned = []
+            for leaf in dom:
+                if isinstance(leaf, (list, tuple)) and len(leaf) == 3:
+                    field_name = leaf[0]
+                    if field_name == "display_in_project":
+                        continue
+                    if field_name == "parent_id" and leaf[1] in ("=", "==") and (leaf[2] is False or leaf[2] is None):
+                        continue
+                cleaned.append(leaf)
+            return cleaned
+
+        cleaned_domain = _clean_timeline_domain(domain)
+
+        if cleaned_domain:
             if is_project_model:
                 try:
-                    projects = project_model.search(proj_domain + domain)
+                    projects = project_model.search(proj_domain + cleaned_domain)
                 except Exception as e:
                     _logger.warning("Error searching projects with domain %s: %s", domain, e)
                     projects = project_model.search(proj_domain)
@@ -802,11 +911,11 @@ class ProjectTask(models.Model):
                 tasks = task_model.search(task_domain, order="project_id, sequence, id")
             else:
                 try:
-                    tasks = task_model.search(task_domain + domain, order="project_id, sequence, id")
+                    tasks = task_model.search(task_domain + cleaned_domain, order="project_id, sequence, id")
                 except Exception as e:
                     _logger.warning("Domain %s failed on task search: %s. Trying project search fallback.", domain, e)
                     try:
-                        projects = project_model.search(proj_domain + domain)
+                        projects = project_model.search(proj_domain + cleaned_domain)
                         if projects:
                             task_domain.append(("project_id", "in", projects.ids))
                         tasks = task_model.search(task_domain, order="project_id, sequence, id")
@@ -823,6 +932,22 @@ class ProjectTask(models.Model):
                 tasks = task_model.search(task_domain, order="project_id, sequence, id")
             else:
                 tasks = task_model.search(task_domain, order="project_id, sequence, id")
+
+        # Recursively ensure all child tasks, sub-subtasks, and deeper nested items are included
+        if tasks:
+            all_task_ids = set(tasks.ids)
+            curr_parent_ids = list(all_task_ids)
+            while curr_parent_ids:
+                new_children = task_model.search([
+                    ("parent_id", "in", curr_parent_ids),
+                    ("id", "not in", list(all_task_ids)),
+                    ("active", "=", True),
+                ], order="project_id, sequence, id")
+                if not new_children:
+                    break
+                tasks = tasks | new_children
+                all_task_ids.update(new_children.ids)
+                curr_parent_ids = new_children.ids
 
         # Gather relevant projects if not already gathered
         if not projects:
@@ -871,7 +996,7 @@ class ProjectTask(models.Model):
             # User-assigned or default start (converted from UTC to user local timezone)
             if t.planned_date_start:
                 t_s = utc_to_local_dt(self.env, t.planned_date_start)
-                if t_s.hour == 0 and t_s.minute == 0:
+                if t_s.hour == 0 and t_s.minute == 0 and not t.plan_is_auto:
                     t_s = t_s.replace(hour=8, minute=0, second=0)
             else:
                 base_dt = utc_to_local_dt(self.env, t.date_assign or t.create_date or now)
@@ -881,7 +1006,11 @@ class ProjectTask(models.Model):
             if t.planned_date_end:
                 t_e = utc_to_local_dt(self.env, t.planned_date_end)
                 if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 23 and t_e.minute == 59):
-                    t_e = t_e.replace(hour=17, minute=0, second=0)
+                    if not t.plan_is_auto:
+                        t_e = t_e.replace(hour=17, minute=0, second=0)
+            elif t.is_timer_running and t.planned_date_start:
+                # R1 live: no end yet, the bar grows with the running timer (whole minutes, min 1)
+                t_e = t_s + timedelta(minutes=ceil_minutes_between(t_s, now_local))
             elif t.date_deadline:
                 t_e = utc_to_local_dt(self.env, t.date_deadline) if isinstance(t.date_deadline, datetime) else datetime.combine(t.date_deadline, time(17, 0, 0))
                 if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 23 and t_e.minute == 59):
@@ -891,15 +1020,14 @@ class ProjectTask(models.Model):
                 # Takes span of exactly one day on the timeline (same day 17:00)
                 t_e = datetime.combine(t_s.date(), time(17, 0, 0))
 
-            # Encompass subtasks: parent task can NEVER be smaller than subtasks inside it!
+            # Encompass subtasks ONLY for parents without a manual plan (auto plan / no plan).
+            # A parent with a manual plan keeps its own span; subtasks beyond it make a red tail instead.
             subtasks = tasks.filtered(lambda s: s.parent_id.id == t.id)
-            if subtasks:
-                for sub in subtasks:
-                    sub_s, sub_e = get_task_dates(sub)
-                    if sub_s < t_s:
-                        t_s = sub_s
-                    if sub_e > t_e:
-                        t_e = sub_e
+            manual_parent_plan = bool(t.planned_date_start and t.planned_date_end) and not t.plan_is_auto
+            if subtasks and not manual_parent_plan:
+                sub_pairs = [get_task_dates(sub) for sub in subtasks]
+                t_s = min(t_s, min(p[0] for p in sub_pairs))
+                t_e = max(t_e, max(p[1] for p in sub_pairs))
 
             if t_e < t_s:
                 t_e = datetime.combine(t_s.date(), time(17, 0, 0))
@@ -952,35 +1080,80 @@ class ProjectTask(models.Model):
             return res
 
         def get_task_effective_deadline(task_obj):
-            """
-            Returns the local datetime of a task's delayed deadline ONLY when:
-            1) date_deadline was explicitly set beyond planned_date_end, OR
-            2) the live timer is running or finished beyond planned_date_end.
-            Normal subtask planned_date_end NEVER counts as a deadline delay.
-            """
-            _, t_e = get_task_dates(task_obj)
-            candidates = []
+            """Local datetime of the task's deadline (typed by a user or auto-written), or None."""
             if task_obj.date_deadline:
                 dl_loc = utc_to_local_dt(self.env, task_obj.date_deadline) if isinstance(task_obj.date_deadline, datetime) else datetime.combine(task_obj.date_deadline, time(17, 0, 0))
-                if (dl_loc.hour == 0 and dl_loc.minute == 0) or (dl_loc.hour == 23 and dl_loc.minute == 59):
+                if not task_obj.deadline_is_auto and ((dl_loc.hour == 0 and dl_loc.minute == 0) or (dl_loc.hour == 23 and dl_loc.minute == 59)):
                     dl_loc = dl_loc.replace(hour=17, minute=0, second=0)
-                candidates.append(dl_loc)
-            if task_obj.is_timer_running and now_local > t_e:
-                candidates.append(now_local)
-            return max(candidates) if candidates else None
+                return dl_loc
+            return None
 
-        def get_all_descendant_deadlines(task_obj):
-            dls = []
-            child_tasks = tasks.filtered(lambda c: c.parent_id.id == task_obj.id)
-            for child in child_tasks:
-                _, child_e = get_task_dates(child)
-                c_dl = get_task_effective_deadline(child)
-                # Only propagate a child's deadline upward if the child ITSELF is delayed beyond its planned end
-                if c_dl and (c_dl.date() > child_e.date() or (c_dl > child_e and child.is_timer_running)):
-                    dls.append(c_dl)
-                dls.extend(get_all_descendant_deadlines(child))
-            return dls
+        def has_manual_plan(task_obj):
+            return bool(task_obj.planned_date_start and task_obj.planned_date_end) and not task_obj.plan_is_auto
 
+        delay_cache = {}
+
+        def compute_task_delay(task_obj):
+            """
+            Red tail ("vėlavimas") = from the planned end up to the deadline (deadline LATER than the plan end).
+            Returns dict(deadline, kind, seconds, days, end):
+              kind "late"  -> a stored deadline (typed, or auto-written when work went past the plan) is after the plan end
+              kind "timer" -> the running timer is already past the planned end (live, not saved yet)
+              kind ""      -> no tail
+              end          -> effective end incl. the tail and all descendants (used by parents)
+            A leaf with an AUTO plan (plan = real work) never has a tail. A parent gets the tail of the
+            descendant that ends last (R3).
+            """
+            if task_obj.id in delay_cache:
+                return delay_cache[task_obj.id]
+            _, t_e = get_task_dates(task_obj)
+            own_dl = get_task_effective_deadline(task_obj)
+            children = tasks.filtered(lambda c: c.parent_id.id == task_obj.id)
+            manual = has_manual_plan(task_obj)
+            eff_end = t_e
+            kind = ""
+            deadline_out = own_dl
+
+            if own_dl and own_dl > eff_end and (manual or children):
+                eff_end = own_dl
+                kind = "late"
+            if task_obj.is_timer_running and manual and now_local > eff_end:
+                eff_end = floor_minute(now_local) + timedelta(minutes=1)
+                kind = "timer"
+            for child in children:
+                cres = compute_task_delay(child)
+                if cres["end"] > eff_end:
+                    eff_end = cres["end"]
+                    kind = cres["kind"] or "late"
+
+            seconds = 0.0
+            days = 0
+            if kind:
+                deadline_out = eff_end
+                seconds = float(ceil_minutes_between(t_e, eff_end) * 60)
+                days = (eff_end.date() - t_e.date()).days if eff_end.date() > t_e.date() else 0
+            res = {"deadline": deadline_out, "kind": kind, "seconds": seconds, "days": days, "end": eff_end}
+            delay_cache[task_obj.id] = res
+            return res
+
+        def compute_container_delay(own_dl, c_end, c_is_done, child_tasks):
+            """Tail for a project/milestone: its own deadline after its end, or the latest task tail."""
+            eff_end = c_end
+            kind = ""
+            if own_dl and c_end and own_dl > c_end:
+                eff_end = own_dl
+                kind = "late"
+            for ct in child_tasks:
+                cres = compute_task_delay(ct)
+                if c_end and cres["end"] > eff_end:
+                    eff_end = cres["end"]
+                    kind = cres["kind"] or "late"
+            res = {"deadline": own_dl, "kind": kind, "seconds": 0.0, "days": 0}
+            if kind:
+                res["deadline"] = eff_end
+                res["seconds"] = float(ceil_minutes_between(c_end, eff_end) * 60)
+                res["days"] = (eff_end.date() - c_end.date()).days if eff_end.date() > c_end.date() else 0
+            return res
         def build_task_dict(t, parent_key):
             metrics = get_task_metrics(t)
             t_is_done = metrics["is_done"]
@@ -1003,14 +1176,13 @@ class ProjectTask(models.Model):
             else:
                 w_h = calculate_lithuanian_working_hours(t_start, t_end)
                 t_alloc = t.allocated_hours
-                if not t_alloc or (subtasks and w_h > 0 and abs((t_alloc or 0.0) - w_h) > 0.1):
-                    if w_h > 0:
-                        t_alloc = w_h
-                        try:
-                            t.with_context(skip_hierarchy_propagation=True).sudo().write({"allocated_hours": w_h})
-                        except Exception:
-                            pass
-                allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
+                if w_h > 0 and (not t_alloc or abs((t_alloc or 0.0) - w_h) > 0.1):
+                    t_alloc = w_h
+                    try:
+                        t.with_context(skip_hierarchy_propagation=True).sudo().write({"allocated_hours": w_h})
+                    except Exception:
+                        pass
+                allocated_str = format_hours_label(t_alloc)
 
             # Grid alignment for DHTMLX Gantt visual coordinates (midnight boundaries)
             gantt_start = datetime.combine(t_start.date(), time.min)
@@ -1101,46 +1273,19 @@ class ProjectTask(models.Model):
                     color = "#71639e"
                     t_state = "01_in_progress"
 
-            allocated_str = f"{round(t_alloc, 1)}h" if t_alloc else ""
+            allocated_str = format_hours_label(t_alloc)
 
-            # Deadline and Delay Calculation (ONLY when deadline is explicitly > planned_date_end or timer exceeded planned_date_end)
-            deadline_str = False
-            deadline_end_str = False
-            has_deadline = False
-            has_deadline_delay = False
-            delay_days = 0
-
-            own_dl = get_task_effective_deadline(t)
-            child_dls = get_all_descendant_deadlines(t)
-            candidate_dls = []
-            if own_dl:
-                candidate_dls.append(own_dl)
-            if child_dls:
-                candidate_dls.append(max(child_dls))
-
-            if candidate_dls:
-                effective_dl = max(candidate_dls)
-                has_deadline = True
-                dl_dt = effective_dl
-                deadline_str = dl_dt.strftime(dt_format)
-
-                # Midnight boundary for visual end of deadline on Gantt grid
-                if dl_dt.time() > time.min:
-                    gantt_dl_end = datetime.combine(dl_dt.date() + timedelta(days=1), time.min)
-                else:
-                    gantt_dl_end = datetime.combine(dl_dt.date(), time.min)
-
-                deadline_end_str = gantt_dl_end.strftime(dt_format)
-
-                # Delay occurs ONLY if deadline extends past the planned work end date (or timer ran beyond planned end)
-                if dl_dt.date() > t_end.date():
-                    has_deadline_delay = True
-                    delay_days = (dl_dt.date() - t_end.date()).days
-                elif dl_dt > t_end and (t.is_timer_running or t.state == "1_done") and (dl_dt - t_end).total_seconds() >= 60:
-                    has_deadline_delay = True
-                    delay_days = 1
-                elif dl_dt.date() < t_end.date():
-                    delay_days = -(t_end.date() - dl_dt.date()).days
+            # Deadline and Delay Calculation (see compute_task_delay)
+            delay_info = compute_task_delay(t)
+            dl_dt = delay_info["deadline"]
+            deadline_str = dl_dt.strftime(dt_format) if dl_dt else False
+            deadline_end_str = deadline_str
+            has_deadline = bool(dl_dt)
+            has_deadline_delay = bool(delay_info["kind"])
+            delay_kind = delay_info["kind"]
+            delay_days = delay_info["days"]
+            delay_hours = round(delay_info["seconds"] / 3600.0, 1)
+            delay_minutes = int(round(delay_info["seconds"] / 60.0))
 
             p_start_loc = utc_to_local_dt(self.env, t.planned_date_start) if t.planned_date_start else False
             p_end_loc = utc_to_local_dt(self.env, t.planned_date_end) if t.planned_date_end else False
@@ -1150,7 +1295,7 @@ class ProjectTask(models.Model):
                 "odoo_id": t.id,
                 "text": t.name or "Untitled Task",
                 "type": "task",
-                "open": True,
+                "open": False,
                 "parent": parent_key,
                 "start_date": t_start_str,
                 "end_date": t_end_str,
@@ -1162,7 +1307,14 @@ class ProjectTask(models.Model):
                 "deadline_end": deadline_end_str,
                 "has_deadline": has_deadline,
                 "has_deadline_delay": has_deadline_delay,
+                "delay_kind": delay_kind,
+                "has_own_deadline": bool(t.date_deadline),
+                "delay_minutes": delay_minutes,
+                "plan_is_manual": bool(t.planned_date_start and t.planned_date_end) and not t.plan_is_auto,
+                "deadline_is_auto": bool(t.deadline_is_auto),
+                "timer_total_seconds": int(t.timer_total_seconds or 0),
                 "delay_days": delay_days,
+                "delay_hours": delay_hours,
                 "has_dates": has_dates,
                 "is_hourly": bool(has_dates and t_start.date() == t_end.date() and (t_end - t_start).total_seconds() < 9 * 3600),
                 "is_timer_running": bool(t.is_timer_running),
@@ -1176,10 +1328,10 @@ class ProjectTask(models.Model):
                 "assignee_avatars": avatars,
                 "stage_name": t.stage_id.name if t.stage_id else "",
                 "stage_id": t.stage_id.id if t.stage_id else False,
-                "project_name": t.project_id.name if t.project_id else "",
-                "project_id": t.project_id.id if t.project_id else False,
-                "milestone_id": t.milestone_id.id if t.milestone_id else False,
-                "milestone_name": t.milestone_id.name if t.milestone_id else "",
+                "project_name": (t.project_id.name if t.project_id else (t.parent_id.project_id.name if t.parent_id and t.parent_id.project_id else "")),
+                "project_id": (t.project_id.id if t.project_id else (t.parent_id.project_id.id if t.parent_id and t.parent_id.project_id else False)),
+                "milestone_id": (t.milestone_id.id if t.milestone_id else (t.parent_id.milestone_id.id if t.parent_id and t.parent_id.milestone_id else False)),
+                "milestone_name": (t.milestone_id.name if t.milestone_id else (t.parent_id.milestone_id.name if t.parent_id and t.parent_id.milestone_id else "")),
                 "color": color,
                 "state": t_state,
                 "is_locked": is_locked,
@@ -1204,17 +1356,29 @@ class ProjectTask(models.Model):
             for child in children:
                 add_task_hierarchy(child, f"task_{t.id}", proj_tasks)
 
+        # Helper to check if task belongs to this project directly or via any ancestor
+        def task_belongs_to_proj(task, proj_id):
+            curr = task
+            while curr:
+                if curr.project_id and curr.project_id.id == proj_id:
+                    return True
+                curr = curr.parent_id
+            return False
+
         # 1. Add project groups, milestones, and nested tasks
         for p in projects:
             p_key = f"proj_{p.id}"
             seen_project_keys.add(p_key)
 
-            p_tasks = tasks.filtered(lambda t: t.project_id.id == p.id)
+            p_tasks = tasks.filtered(lambda t: task_belongs_to_proj(t, p.id))
             p_milestones = milestones.filtered(lambda m: m.project_id.id == p.id)
 
             # Project Base Dates
+            task_date_pairs = [get_task_dates(t) for t in p_tasks] if p_tasks else []
             if p.date_start:
                 p_start = datetime.combine(p.date_start, datetime.min.time()) if not isinstance(p.date_start, datetime) else utc_to_local_dt(self.env, p.date_start)
+            elif task_date_pairs:
+                p_start = min(pair[0] for pair in task_date_pairs)
             else:
                 p_start = datetime.combine(utc_to_local_dt(self.env, p.create_date).date(), datetime.min.time()) if p.create_date else now_local
 
@@ -1223,28 +1387,37 @@ class ProjectTask(models.Model):
 
             if p.date:
                 p_end = datetime.combine(p.date, datetime.max.time().replace(microsecond=0)) if not isinstance(p.date, datetime) else utc_to_local_dt(self.env, p.date)
+            elif task_date_pairs:
+                p_end = max(pair[1] for pair in task_date_pairs)
             else:
-                p_end = p_start + timedelta(days=30)
+                p_end = p_start.replace(hour=17, minute=0, second=0)
 
             if (p_end.hour == 0 and p_end.minute == 0) or (p_end.hour == 12 and p_end.minute == 0) or (p_end.hour == 23 and p_end.minute == 59):
                 p_end = p_end.replace(hour=17, minute=0, second=0)
 
             # A PROJECT CANNOT BE SMALLER THAN ANY TASK OR MILESTONE INSIDE IT!
-            for t in p_tasks:
-                t_s, t_e = get_task_dates(t)
+            for t_s, t_e in task_date_pairs:
                 if t_s < p_start:
                     p_start = t_s
                 if t_e > p_end:
                     p_end = t_e
 
             for m in p_milestones:
-                if m.deadline:
-                    m_dl = datetime.combine(m.deadline, time(17, 0, 0)) if not isinstance(m.deadline, datetime) else utc_to_local_dt(self.env, m.deadline)
+                m_start_val = getattr(m, "date_start", False)
+                if m_start_val:
+                    m_s = datetime.combine(m_start_val, time(8, 0, 0)) if not isinstance(m_start_val, datetime) else utc_to_local_dt(self.env, m_start_val)
+                    if m_s < p_start:
+                        p_start = m_s
+                m_end_val = getattr(m, "planned_date_end", False) or m.deadline
+                if m_end_val:
+                    m_dl = datetime.combine(m_end_val, time(17, 0, 0)) if not isinstance(m_end_val, datetime) else utc_to_local_dt(self.env, m_end_val)
                     if m_dl > p_end:
                         p_end = m_dl
 
             if p_end <= p_start:
-                p_end = p_start + timedelta(days=1)
+                p_end = datetime.combine(p_start.date(), time(17, 0, 0))
+                if p_end <= p_start:
+                    p_end = p_start + timedelta(hours=1)
 
             # Grid alignment for Project Gantt visual bar (midnight boundaries)
             gantt_p_start = datetime.combine(p_start.date(), time.min)
@@ -1264,16 +1437,15 @@ class ProjectTask(models.Model):
             # Project Progress & Completion:
             total_allocated = sum(p_tasks.mapped("allocated_hours") or [0.0])
 
-            # Auto-fill project allocated_hours from darbo valandos if unset or 0.0
+            # Auto-fill project allocated_hours from darbo valandos
+            p_work_hours = calculate_lithuanian_working_hours(p_start, p_end)
             p_alloc = p.allocated_hours
-            if not p_alloc:
-                p_work_hours = calculate_lithuanian_working_hours(p_start, p_end)
-                if p_work_hours > 0:
-                    p_alloc = p_work_hours
-                    try:
-                        p.sudo().write({"allocated_hours": p_work_hours})
-                    except Exception:
-                        pass
+            if p_work_hours > 0 and (not p_alloc or abs((p_alloc or 0.0) - p_work_hours) > 0.1):
+                p_alloc = p_work_hours
+                try:
+                    p.sudo().write({"allocated_hours": p_work_hours})
+                except Exception:
+                    pass
 
             display_proj_alloc = p_alloc or total_allocated
             p_stage_name = (p.stage_id.name or "").lower() if hasattr(p, "stage_id") and p.stage_id else ""
@@ -1339,38 +1511,30 @@ class ProjectTask(models.Model):
             p_has_deadline = False
             p_has_deadline_delay = False
             p_delay_days = 0
+            p_delay_hours = 0.0
+            p_delay_minutes = 0
 
             p_date_deadline = getattr(p, "date_deadline", False)
-            candidate_p_deadlines = []
+            p_own_dl = None
             if p_date_deadline:
-                candidate_p_deadlines.append(p_date_deadline if not isinstance(p_date_deadline, datetime) else utc_to_local_dt(self.env, p_date_deadline).date())
-            for t in p_tasks:
-                _, t_e = get_task_dates(t)
-                t_eff_dl = get_task_effective_deadline(t)
-                if t_eff_dl and t_eff_dl.date() > t_e.date():
-                    candidate_p_deadlines.append(t_eff_dl.date())
-
-            if candidate_p_deadlines:
+                p_own_dl = p_date_deadline if isinstance(p_date_deadline, datetime) else datetime.combine(p_date_deadline, time(17, 0, 0))
+            p_delay = compute_container_delay(p_own_dl, p_end, p_is_done, p_tasks)
+            p_delay_kind = p_delay["kind"]
+            if p_delay["deadline"]:
                 p_has_deadline = True
-                p_effective_dl = max(candidate_p_deadlines)
-                p_dl_dt = datetime.combine(p_effective_dl, time(17, 0, 0))
-                p_deadline_str = p_dl_dt.strftime(dt_format)
-
-                # Midnight boundary for visual end of deadline on Gantt grid
-                gantt_p_dl_end = datetime.combine(p_effective_dl + timedelta(days=1), time.min)
-                p_deadline_end_str = gantt_p_dl_end.strftime(dt_format)
-
-                if p_effective_dl > p_end.date():
-                    p_has_deadline_delay = True
-                    p_delay_days = (p_effective_dl - p_end.date()).days
-                elif p_effective_dl < p_end.date():
-                    p_delay_days = -(p_end.date() - p_effective_dl).days
+                p_deadline_str = p_delay["deadline"].strftime(dt_format)
+                p_deadline_end_str = p_deadline_str
+            if p_delay_kind:
+                p_has_deadline_delay = True
+                p_delay_days = p_delay["days"]
+                p_delay_hours = round(p_delay["seconds"] / 3600.0, 1)
+                p_delay_minutes = int(round(p_delay["seconds"] / 60.0))
 
             gantt_tasks.append({
                 "id": p_key,
                 "odoo_id": p.id,
                 "text": p.name or "Untitled Project",
-                "open": True,
+                "open": False,
                 "start_date": p_start_str,
                 "end_date": p_end_str,
                 "work_start_date": p_work_start_str,
@@ -1379,10 +1543,13 @@ class ProjectTask(models.Model):
                 "deadline_end": p_deadline_end_str,
                 "has_deadline": p_has_deadline,
                 "has_deadline_delay": p_has_deadline_delay,
+                "delay_kind": p_delay_kind,
                 "delay_days": p_delay_days,
+                "delay_hours": p_delay_hours,
+                "delay_minutes": p_delay_minutes,
                 "progress": round(p_prog, 2),
                 "progress_percent": round(p_prog * 100, 1),
-                "allocated_hours": f"{round(display_proj_alloc, 1)}h" if display_proj_alloc else "",
+                "allocated_hours": format_hours_label(display_proj_alloc),
                 "allocated_hours_raw": p_alloc or 0.0,
                 "assignees": p.user_id.name or "",
                 "assignee_avatars": [
@@ -1494,41 +1661,31 @@ class ProjectTask(models.Model):
                 m_has_deadline = False
                 m_has_deadline_delay = False
                 m_delay_days = 0
-
-                task_deadlines = []
-                for t in m_tasks:
-                    _, t_e = get_task_dates(t)
-                    t_eff_dl = get_task_effective_deadline(t)
-                    if t_eff_dl and t_eff_dl.date() > t_e.date():
-                        task_deadlines.append(t_eff_dl.date())
+                m_delay_hours = 0.0
+                m_delay_minutes = 0
 
                 m_dl_base = m.deadline if m.deadline else False
-                candidate_ms_deadlines = list(task_deadlines)
+                m_own_dl = None
                 if m_dl_base:
-                    candidate_ms_deadlines.append(m_dl_base)
-
-                if candidate_ms_deadlines:
+                    m_own_dl = m_dl_base if isinstance(m_dl_base, datetime) else datetime.combine(m_dl_base, time(17, 0, 0))
+                m_delay = compute_container_delay(m_own_dl, m_end, m_is_done, m_tasks)
+                m_delay_kind = m_delay["kind"]
+                if m_delay["deadline"]:
                     m_has_deadline = True
-                    m_effective_dl = max(candidate_ms_deadlines)
-                    m_dl_dt = datetime.combine(m_effective_dl, time(17, 0, 0))
-                    m_deadline_str = m_dl_dt.strftime(dt_format)
-
-                    # Midnight boundary for visual end of deadline on Gantt grid
-                    gantt_m_dl_end = datetime.combine(m_effective_dl + timedelta(days=1), time.min)
-                    m_deadline_end_str = gantt_m_dl_end.strftime(dt_format)
-
-                    if m_effective_dl > m_end.date():
-                        m_has_deadline_delay = True
-                        m_delay_days = (m_effective_dl - m_end.date()).days
-                    elif m_effective_dl < m_end.date():
-                        m_delay_days = -(m_end.date() - m_effective_dl).days
+                    m_deadline_str = m_delay["deadline"].strftime(dt_format)
+                    m_deadline_end_str = m_deadline_str
+                if m_delay_kind:
+                    m_has_deadline_delay = True
+                    m_delay_days = m_delay["days"]
+                    m_delay_hours = round(m_delay["seconds"] / 3600.0, 1)
+                    m_delay_minutes = int(round(m_delay["seconds"] / 60.0))
 
                 gantt_tasks.append({
                     "id": m_key,
                     "odoo_id": m.id,
                     "text": m.name or "Gairė",
                     "type": "task",
-                    "open": True,
+                    "open": False,
                     "parent": p_key,
                     "start_date": m_start_str,
                     "end_date": m_end_str,
@@ -1540,10 +1697,13 @@ class ProjectTask(models.Model):
                     "deadline_end": m_deadline_end_str,
                     "has_deadline": m_has_deadline,
                     "has_deadline_delay": m_has_deadline_delay,
+                    "delay_kind": m_delay_kind,
                     "delay_days": m_delay_days,
+                    "delay_hours": m_delay_hours,
+                    "delay_minutes": m_delay_minutes,
                     "progress": round(m_prog, 2),
                     "progress_percent": round(m_prog * 100, 1),
-                    "allocated_hours": f"{round(m_allocated, 1)}h" if m_allocated else "",
+                    "allocated_hours": format_hours_label(m_allocated),
                     "assignees": "",
                     "assignee_avatars": [],
                     "project_name": p.name or "",
@@ -1696,14 +1856,6 @@ class ProjectTask(models.Model):
                         vals["planned_date_start"] = dt_start_utc
                     if end_date:
                         vals["planned_date_end"] = dt_end_utc
-                        # Dragging on timeline changes planned dates, NEVER creates a deadline delay (vėlavimas)!
-                        # If task previously had a non-delayed deadline or if new planned_date_end >= old date_deadline, clear it.
-                        if task.date_deadline:
-                            old_dl_local = utc_to_local_dt(self.env, task.date_deadline) if isinstance(task.date_deadline, datetime) else datetime.combine(task.date_deadline, time(17, 0, 0))
-                            old_end_local = utc_to_local_dt(self.env, task.planned_date_end) if task.planned_date_end else old_dl_local
-                            was_delayed = bool(old_dl_local and old_end_local and old_dl_local.date() > old_end_local.date())
-                            if not was_delayed or (dt_end_local and old_dl_local and dt_end_local.date() >= old_dl_local.date()):
-                                vals["date_deadline"] = False
 
                     if dt_start_local and dt_end_local:
                         t_w_hours = calculate_lithuanian_working_hours(dt_start_local, dt_end_local)
@@ -1734,7 +1886,11 @@ class ProjectTask(models.Model):
                         vals["state"] = "01_in_progress"
 
                     if vals:
-                        task.with_context(from_timeline_batch=True).write(vals)
+                        save_ctx = {"from_timeline_batch": True}
+                        if task.plan_is_auto and task.child_ids:
+                            # span derived from the subtasks: keep it "auto" (recomputed by the backend)
+                            save_ctx["gannt_auto_plan"] = True
+                        task.with_context(**save_ctx).write(vals)
             except Exception as e:
                 _logger.warning("Error saving task %s schedule: %s", str_id, e)
 

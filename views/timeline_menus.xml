@@ -14,13 +14,4 @@
         <field name="target">current</field>
     </record>
 
-    <!-- Direct Menu Item under Project App -->
-    <menuitem
-        id="menu_project_gannt_lt"
-        name="GanntLT Tvarkaraštis"
-        parent="project.menu_main_pm"
-        action="action_gannt_lt"
-        groups="GanntLT.group_gannt_lt_user,GanntLT.group_gannt_lt_manager,base.group_system"
-        sequence="3"
-    />
 </odoo>

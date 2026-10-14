@@ -18,71 +18,163 @@
                     <div class="timeline_toolbar">
                         <div class="toolbar_left d-flex align-items-center gap-2">
                             <!-- Project Filter Dropdown -->
-                            <select class="form-select form-select-sm project_select" style="width: 200px;" t-model="state.selectedProjectId" t-on-change="onProjectChange">
+                            <select class="form-select form-select-sm project_select" t-model="state.selectedProjectId" t-on-change="onProjectChange">
                                 <option value="0">Visi projektai</option>
                                 <t t-foreach="state.projects" t-as="p" t-key="p.id">
                                     <option t-att-value="p.id" t-esc="p.name"/>
                                 </t>
                             </select>
-                            <span t-if="!state.canEdit" class="badge bg-secondary text-white px-2 py-1" title="Jūs turite tik peržiūros (Can View) teises">
+                            <span t-if="!state.canEdit" class="badge text-bg-secondary" title="Jūs turite tik peržiūros (Can View) teises">
                                 <i class="fa fa-eye me-1"/>Tik peržiūra
                             </span>
                         </div>
 
                         <div class="toolbar_right">
+                            <!-- Backdrop for Work Hours Popover -->
+                            <div t-if="state.showWorkHoursDropdown" class="work_hours_backdrop" t-on-click="closeWorkHoursDropdown"/>
+
                             <!-- Quick Focus to Today & Hierarchy & Fit to Screen -->
                             <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="navigateToday" title="Grįžti į šiandien / Focus on Today">
+                                <div class="btn-group btn-group-sm position-relative" role="group">
+                                    <button class="btn btn-secondary" type="button" t-on-click="toggleWorkHoursDropdown" title="Nustatyti darbo valandas ir pietų pertrauką">
+                                        <i class="fa fa-clock-o me-1"/> Darbo valandos
+                                    </button>
+
+                                    <!-- Working Hours Dropdown Popover -->
+                                    <div t-if="state.showWorkHoursDropdown" class="work_hours_popover shadow-lg border rounded p-3 bg-white" t-on-click="onPopoverClick">
+                                        <div class="d-flex align-items-center justify-content-between mb-2 pb-2 border-bottom">
+                                            <h6 class="mb-0 fw-bold text-dark">
+                                                <i class="fa fa-clock-o text-primary me-2"/>Darbo valandų nustatymai
+                                            </h6>
+                                            <button type="button" class="btn-close" aria-label="Uždaryti" t-on-click="closeWorkHoursDropdown"/>
+                                        </div>
+
+                                        <div class="text-muted mb-2" style="font-size: 11px; line-height: 1.4;">
+                                            Nurodykite kiekvienos savaitės dienos darbo laiką. Pietų pertrauka bus pažymėta kaip nedarbo laikas (blankiom raidėm).
+                                        </div>
+
+                                        <div class="d-flex align-items-center gap-2 mb-2 pb-2 border-bottom">
+                                            <button type="button" class="btn btn-sm btn-outline-primary" t-on-click="applyWorkHoursToWeekdays" title="Nukopijuoti Pirmadienio nustatymus į Antradienį–Penktadienį">
+                                                <i class="fa fa-copy me-1"/>Taikyti I–V (kaip Pirmadienį)
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" t-on-click="resetDefaultWorkHours" title="Atstatyti standartinį grafiką (08:00–17:00, pietūs 12:45–13:45)">
+                                                <i class="fa fa-history me-1"/>Standartinis (8:00–17:00)
+                                            </button>
+                                        </div>
+
+                                        <div class="my-1" style="overflow-x: hidden;">
+                                            <table class="table table-sm table-borderless align-middle mb-0 w-100" style="font-size: 12px;">
+                                                <thead>
+                                                    <tr class="text-muted border-bottom" style="font-size: 10px; text-transform: uppercase;">
+                                                        <th style="width: 140px;">Diena</th>
+                                                        <th style="width: 72px;" class="text-center">Pradžia</th>
+                                                        <th style="width: 154px;" class="text-center">Pietų pertrauka</th>
+                                                        <th style="width: 72px;" class="text-center">Pabaiga</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <t t-foreach="workDaysList" t-as="day" t-key="day.dayIndex">
+                                                        <tr t-att-class="day.active ? '' : 'text-muted bg-light opacity-75'">
+                                                            <td>
+                                                                <div class="form-check form-switch mb-0">
+                                                                    <input class="form-check-input" type="checkbox" t-model="day.active" t-att-id="'work_day_switch_' + day.dayIndex"/>
+                                                                    <label class="form-check-label fw-semibold ms-1" t-att-for="'work_day_switch_' + day.dayIndex" t-esc="day.name"/>
+                                                                </div>
+                                                            </td>
+                                                            <t t-if="day.active">
+                                                                <td>
+                                                                    <input type="text"
+                                                                           class="form-control form-control-sm text-center font-monospace px-1 work_time_input"
+                                                                          
+                                                                           maxlength="5"
+                                                                           placeholder="08:00"
+                                                                           t-model="day.start"
+                                                                           t-on-blur="(ev) => this.onTimeInputBlur(day, 'start', ev)"/>
+                                                                </td>
+                                                                <td>
+                                                                    <div class="d-flex align-items-center justify-content-center gap-1">
+                                                                        <input type="text"
+                                                                               class="form-control form-control-sm text-center font-monospace px-1 work_time_input"
+                                                                              
+                                                                               maxlength="5"
+                                                                               placeholder="12:45"
+                                                                               t-model="day.lunchStart"
+                                                                               t-on-blur="(ev) => this.onTimeInputBlur(day, 'lunchStart', ev)"/>
+                                                                        <span class="text-muted">–</span>
+                                                                        <input type="text"
+                                                                               class="form-control form-control-sm text-center font-monospace px-1 work_time_input"
+                                                                              
+                                                                               maxlength="5"
+                                                                               placeholder="13:45"
+                                                                               t-model="day.lunchEnd"
+                                                                               t-on-blur="(ev) => this.onTimeInputBlur(day, 'lunchEnd', ev)"/>
+                                                                    </div>
+                                                                </td>
+                                                                <td>
+                                                                    <input type="text"
+                                                                           class="form-control form-control-sm text-center font-monospace px-1 work_time_input"
+                                                                          
+                                                                           maxlength="5"
+                                                                           placeholder="17:00"
+                                                                           t-model="day.end"
+                                                                           t-on-blur="(ev) => this.onTimeInputBlur(day, 'end', ev)"/>
+                                                                </td>
+                                                            </t>
+                                                            <t t-else="">
+                                                                <td colspan="3" class="text-muted text-center fst-italic py-1" style="font-size: 11px;">
+                                                                    Poilsio diena
+                                                                </td>
+                                                            </t>
+                                                        </tr>
+                                                    </t>
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        <div class="d-flex align-items-center justify-content-end gap-2 mt-3 pt-2 border-top">
+                                            <button type="button" class="btn btn-sm btn-outline-secondary px-3" t-on-click="closeWorkHoursDropdown">
+                                                Atšaukti
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-primary px-3" t-on-click="saveWorkHours">
+                                                <i class="fa fa-check me-1"/>Išsaugoti
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button class="btn btn-secondary" t-on-click="navigateToday" title="Grįžti į šiandien / Focus on Today">
                                     <i class="fa fa-calendar-check-o me-1"/> Šiandien
                                 </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-att-disabled="!canUndo" t-on-click="undoAction" title="Atšaukti paskutinį veiksmą (Ctrl+Z) / Undo">
+                                <button class="btn btn-secondary" t-att-disabled="!canUndo" t-on-click="undoAction" title="Atšaukti paskutinį veiksmą (Ctrl+Z) / Undo">
                                     <i class="fa fa-undo me-1"/> Atšaukti
                                 </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="expandAll" title="Išskleisti viską">
+                                <button class="btn btn-secondary" t-on-click="expandAll" title="Išskleisti viską">
                                     <i class="fa fa-expand me-1"/> Išskleisti
                                 </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="collapseAll" title="Suskleisti viską">
+                                <button class="btn btn-secondary" t-on-click="collapseAll" title="Suskleisti viską">
                                     <i class="fa fa-compress me-1"/> Suskleisti
                                 </button>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="fitToScreen" title="Pritaikyti pasirinktą užduotį arba visą tvarkaraštį ekrane (Fit to screen)">
-                                    <i class="fa fa-arrows-alt me-1"/> Pritaikyti ekrane
+                                <button class="btn btn-secondary" t-on-click="resetView" title="Atstatyti į pradinį vaizdą (40%, suskleista, centruota į šiandien) / Reset View">
+                                    <i class="fa fa-refresh me-1"/> Pradinis vaizdas
                                 </button>
                             </div>
 
-                            <!-- Single Unified Zoom Controls (Replaces Diena, Savaitė, Mėnuo, Metai) -->
+                            <!-- Single Unified Zoom Controls (Percentage Only, No Dropdown) -->
                             <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomOut" title="Mažinti / Zoom Out">
+                                <button class="btn btn-secondary" t-on-click="zoomOut" title="Mažinti / Zoom Out (-)">
                                     <i class="fa fa-search-minus"/>
                                 </button>
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <button class="btn btn-outline-secondary btn_timeline dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Pasirinkti mastelį">
-                                        <span t-esc="state.zoomLevel + '%'"/>
-                                    </button>
-                                    <ul class="dropdown-menu dropdown-menu-end shadow">
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(10)">10% – Ekstremalus (5+ metai)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(15)">15% – Ekstremalus (3–5 metai)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(20)">20% – Keli metai (2–3 metai)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(35)">35% – Metai (1–2 metai)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(50)">50% – Pusmetis (6 mėn.)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(75)">75% – Keli mėnesiai</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(100)">100% – Normalus (Dienomis)</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(150)">150% – Padidintas</a></li>
-                                        <li><a class="dropdown-item small" href="#" t-on-click.prevent="() => this.setZoom(250)">250% – Maksimalus (Dienomis)</a></li>
-                                        <li><hr class="dropdown-divider"/></li>
-                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(300)"><i class="fa fa-clock-o me-1"/>300% – Valandinis (2 val.)</a></li>
-                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(400)"><i class="fa fa-clock-o me-1"/>400% – Valandinis (1 val.)</a></li>
-                                        <li><a class="dropdown-item small fw-bold text-primary" href="#" t-on-click.prevent="() => this.setZoom(500)"><i class="fa fa-clock-o me-1"/>500% – Valandinis detalus (1 val. platus)</a></li>
-                                        <li><a class="dropdown-item small fw-bold text-success" href="#" t-on-click.prevent="() => this.setZoom(600)"><i class="fa fa-clock-o me-1"/>600% – Minutinis (15 min.)</a></li>
-                                    </ul>
-                                </div>
-                                <button class="btn btn-outline-secondary btn_timeline" t-on-click="zoomIn" title="Didinti / Zoom In">
+                                <button class="btn btn-secondary px-2 fw-semibold" type="button" style="min-width: 52px;" t-on-click="resetView" title="Atstatyti pradinį 0% vaizdą">
+                                    <span t-esc="state.zoomLevel + '%'"/>
+                                </button>
+                                <button class="btn btn-secondary" t-on-click="zoomIn" title="Didinti / Zoom In (+)">
                                     <i class="fa fa-search-plus"/>
                                 </button>
                             </div>
 
                             <!-- Export Dropdown -->
                             <div class="dropdown">
-                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle btn_timeline" type="button" data-bs-toggle="dropdown">
+                                <button class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
                                     <i class="fa fa-download me-1"/> Eksportuoti
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end shadow">

@@ -27,7 +27,7 @@
     display: flex;
     flex-direction: column;
     background-color: #ffffff;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: inherit;
     overflow: hidden;
 
     /* Top Toolbar */
@@ -49,92 +49,69 @@
             flex-wrap: wrap;
         }
 
+        /* Working Hours Dropdown / Popover */
+        .work_hours_backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1045;
+            background: transparent;
+        }
+
+        .work_hours_popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 1050;
+            width: 480px;
+            max-width: 92vw;
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            padding: 14px;
+            color: #334155;
+            font-family: inherit;
+            text-align: left;
+            overflow-x: hidden;
+
+            .form-check-input {
+                cursor: pointer;
+            }
+
+            .work_time_input {
+                width: 62px;
+                height: 28px;
+                font-size: 11px;
+                font-weight: 600;
+                font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                padding: 2px 4px;
+                text-align: center;
+                letter-spacing: 0.5px;
+            }
+
+            table {
+                table-layout: fixed;
+                width: 100%;
+                td, th {
+                    padding: 4px 5px;
+                    vertical-align: middle;
+                }
+            }
+        }
+
 
 
         .project_select {
-            border-color: #ced4da;
+            width: 200px;
             font-size: 12px;
-            &:focus {
-                border-color: #71639e;
-                box-shadow: 0 0 0 0.2rem rgba(113, 99, 158, 0.25);
-            }
         }
 
-        .btn_timeline {
+        /* Buttons are native Odoo/Bootstrap (btn btn-secondary); only keep the toolbar text compact */
+        .btn {
             font-size: 12px;
-            font-weight: 500;
-            line-height: 1.5;
-            padding: 4px 10px;
-            height: 30px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border: 1px solid #ced4da;
-            background-color: #ffffff;
-            color: #495057;
-            transition: all 0.15s ease;
-
-            &:hover {
-                background-color: #f1f3f5;
-                border-color: #adb5bd;
-                color: #212529;
-            }
-
-            &:focus, &:active {
-                box-shadow: none !important;
-                border-color: #71639e;
-            }
-
-            &:disabled, &[disabled] {
-                opacity: 0.55;
-                cursor: not-allowed !important;
-                pointer-events: none;
-                background-color: #f8f9fa !important;
-                color: #adb5bd !important;
-                border-color: #dee2e6 !important;
-            }
-
-            &.btn_active {
-                background-color: #71639e !important;
-                border-color: #71639e !important;
-                color: #ffffff !important;
-                box-shadow: 0 1px 3px rgba(113, 99, 158, 0.3);
-            }
-        }
-
-        // Standalone buttons (not in .btn-group)
-        button.btn_timeline:not(.btn-group *) {
-            border-radius: 4px;
-        }
-
-        // Seamless button grouping across all toolbar button groups
-        .btn-group {
-            display: inline-flex;
-            vertical-align: middle;
-
-            > .btn_timeline,
-            > .btn-group > .btn_timeline {
-                border-radius: 0;
-            }
-
-            > .btn_timeline:first-child,
-            > .btn-group:first-child > .btn_timeline {
-                border-top-left-radius: 4px !important;
-                border-bottom-left-radius: 4px !important;
-            }
-
-            > .btn_timeline:last-child,
-            > .btn-group:last-child > .btn_timeline {
-                border-top-right-radius: 4px !important;
-                border-bottom-right-radius: 4px !important;
-            }
-
-            > .btn_timeline + .btn_timeline,
-            > .btn_timeline + .btn-group,
-            > .btn-group + .btn_timeline,
-            > .btn-group + .btn-group {
-                margin-left: -1px;
-            }
         }
     }
 
@@ -158,24 +135,27 @@
         }
     }
 
-    /* Gantt Scales (Headers) */
+    /* Gantt Scales (Headers) - Dynamically sized to active scales */
     .gantt_grid_scale, .gantt_task_scale {
         background-color: #f8f9fa !important;
         border-bottom: 2px solid #dee2e6 !important;
         color: #495057 !important;
         font-weight: 600;
+        box-sizing: border-box !important;
+        position: relative !important;
     }
 
     .gantt_scale_line {
+        height: 22px !important;
+        line-height: 21px !important;
         border-bottom: 1px solid #dee2e6 !important;
-        box-sizing: border-box;
-
-        &:last-child {
-            border-bottom: none !important;
-        }
+        box-sizing: border-box !important;
+        background-color: #f8f9fa !important;
     }
 
     .gantt_scale_cell {
+        height: 22px !important;
+        line-height: 21px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -184,11 +164,47 @@
         color: #495057 !important;
         border-right: 1px solid #dee2e6 !important;
         box-sizing: border-box !important;
-        text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: 0 1px;
+        text-align: center !important;
+        overflow: clip !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        padding: 0 1px !important;
+        min-width: 0 !important;
+
+        /* Label stays centred in the VISIBLE part of a (possibly thousands of px wide) cell:
+           sticky to the left edge of the scroll port, as wide as min(cell, viewport). */
+        > span {
+            display: block !important;
+            position: sticky !important;
+            left: 0 !important;
+            right: auto !important;
+            transform: none !important;
+            width: var(--gantt-view-w, 100%) !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+            text-align: center !important;
+        }
+
+        &.minute_scale_cell {
+            font-size: 10px !important;
+            padding: 0 !important;
+            letter-spacing: -0.2px !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+
+            > span {
+                text-overflow: clip !important;
+                overflow: visible !important;
+                max-width: none !important;
+            }
+        }
+
+        &.no_division_cell,
+        &:empty {
+            border-right: none !important;
+        }
 
         &.weekend_scale_cell {
             background-color: #dbe0e8 !important; // High contrast grey-silver header for Saturday & Sunday
@@ -196,15 +212,46 @@
             font-weight: 700 !important;
         }
 
+        &.year_boundary_cell {
+            border-left: 2px solid #6b8299 !important;
+        }
+
+        &.quarter_boundary_cell {
+            border-left: 1.5px solid #8fa8bf !important;
+        }
+
+        &.month_boundary_cell {
+            border-left: 1px solid #b8cad9 !important;
+        }
+
+        &.day_boundary_cell {
+            border-left: 1px solid #cbd5e1 !important;
+        }
+
+        &.hour_boundary_cell {
+            border-left: 1px solid #adb5bd !important;
+        }
+
         &.holiday_scale_cell {
             background-color: #ffcfcb !important; // Distinct festive light red header for Lithuanian holidays
             color: #b01a29 !important;
             font-weight: 700 !important;
             border-bottom: 2px solid #dc3545 !important;
+            cursor: help !important;
+
+            &.year_boundary_cell {
+                border-left: 2px solid #6b8299 !important;
+            }
+            &.quarter_boundary_cell {
+                border-left: 1.5px solid #8fa8bf !important;
+            }
+            &.month_boundary_cell {
+                border-left: 1px solid #b8cad9 !important;
+            }
         }
 
         &.today_scale_cell {
-            background-color: #71639e !important;
+            background-color: var(--bs-primary, #71639e) !important;
             color: #ffffff !important;
             font-weight: 700 !important;
         }
@@ -226,8 +273,10 @@
             font-weight: 700;
             display: inline-flex;
             align-items: center;
+            justify-content: center;
             gap: 2px;
             cursor: help;
+            width: 100%;
         }
     }
 
@@ -241,6 +290,7 @@
         display: inline-flex !important;
         align-items: center !important;
         justify-content: center !important;
+        height: 100% !important;
         font-size: 12px !important;
         font-weight: 700 !important;
         color: #495057 !important;
@@ -278,6 +328,50 @@
         &.gantt_selected {
             background-color: rgba(113, 99, 158, 0.08) !important;
         }
+
+        &.gantt_hover_active {
+            background-color: rgba(113, 99, 158, 0.13) !important;
+        }
+
+        &.gantt_hover_child {
+            background-color: rgba(113, 99, 158, 0.06) !important;
+        }
+    }
+
+    .gantt_row {
+        &.gantt_hover_active {
+            border-left: 3px solid #71639e !important;
+        }
+
+        &.gantt_hover_child {
+            border-left: 3px solid rgba(113, 99, 158, 0.45) !important;
+        }
+    }
+
+    .gantt_task_row {
+        &.gantt_hover_active {
+            .gantt_task_cell {
+                background-color: rgba(113, 99, 158, 0.13) !important;
+                &.weekend_cell {
+                    background-color: #ded7ea !important;
+                }
+                &.holiday_cell {
+                    background-color: #ffd8d6 !important;
+                }
+            }
+        }
+
+        &.gantt_hover_child {
+            .gantt_task_cell {
+                background-color: rgba(113, 99, 158, 0.06) !important;
+                &.weekend_cell {
+                    background-color: #e5e0f0 !important;
+                }
+                &.holiday_cell {
+                    background-color: #ffe0df !important;
+                }
+            }
+        }
     }
 
     .gantt_cell {
@@ -289,6 +383,107 @@
         font-size: 13px;
         color: #212529;
         border-right: 1px solid #f1f3f5 !important;
+
+        &.gantt_cell_tree {
+            padding: 0 10px 0 8px !important;
+            overflow: visible !important;
+
+            .gantt_tree_indent {
+                position: relative !important;
+                width: 20px !important;
+                height: 52px !important;
+                min-height: 52px !important;
+                flex-shrink: 0 !important;
+                display: inline-block !important;
+
+                // Straight vertical line through ancestor column: │
+                &.gantt_tree_line_through::before {
+                    content: "";
+                    position: absolute;
+                    top: 0;
+                    bottom: 0;
+                    left: 10px;
+                    width: 1.5px;
+                    background-color: #cbd5e1;
+                }
+
+                // Tee connector branch: ├──
+                &.gantt_tree_elbow_tee {
+                    &::before {
+                        content: "";
+                        position: absolute;
+                        top: 0;
+                        bottom: 0;
+                        left: 10px;
+                        width: 1.5px;
+                        background-color: #cbd5e1;
+                    }
+                    &::after {
+                        content: "";
+                        position: absolute;
+                        top: 26px;
+                        left: 10px;
+                        right: 0;
+                        height: 1.5px;
+                        background-color: #cbd5e1;
+                    }
+                }
+
+                // Corner connector branch for last sibling: └──
+                &.gantt_tree_elbow_bottom {
+                    &::before {
+                        content: "";
+                        position: absolute;
+                        top: 0;
+                        height: 26px;
+                        left: 10px;
+                        width: 1.5px;
+                        background-color: #cbd5e1;
+                    }
+                    &::after {
+                        content: "";
+                        position: absolute;
+                        top: 26px;
+                        left: 10px;
+                        right: 0;
+                        height: 1.5px;
+                        background-color: #cbd5e1;
+                        border-bottom-left-radius: 3px;
+                    }
+                }
+            }
+
+            .gantt_tree_icon {
+                position: relative !important;
+                width: 20px !important;
+                height: 52px !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                flex-shrink: 0 !important;
+
+                &.gantt_blank {
+                    width: 16px !important;
+                    &::after {
+                        content: "";
+                        position: absolute;
+                        top: 26px;
+                        left: 0;
+                        width: 12px;
+                        height: 1.5px;
+                        background-color: #cbd5e1;
+                    }
+                }
+            }
+
+            .subtask_tree_elbow {
+                font-size: 13px;
+                font-weight: 700;
+                color: #94a3b8;
+                margin-right: 4px;
+                line-height: 1;
+            }
+        }
     }
 
     /* Distinct Shading for Weekends (#eaedf2) and Lithuanian Holidays (#ffe6e4) */
@@ -296,16 +491,63 @@
         border-right: 1px solid #e9ecef !important;
         box-sizing: border-box;
 
+        &.year_start_grid_cell {
+            border-left: 2px solid #6b8299 !important;
+        }
+
+        &.quarter_start_grid_cell {
+            border-left: 1.5px solid #8fa8bf !important;
+        }
+
+        &.month_start_grid_cell {
+            border-left: 1px solid #b8cad9 !important;
+        }
+
+        &.day_start_grid_cell {
+            border-left: 1px solid #cbd5e1 !important;
+        }
+
+        &.hour_start_grid_cell {
+            border-left: 1px solid #dee2e6 !important;
+        }
+
         &.weekend_cell {
             background-color: #eaedf2 !important; // Clearly visible shaded background for weekend days
             border-left: 1px solid #d8dde5 !important;
             border-right: 1px solid #d8dde5 !important;
+
+            &.year_start_grid_cell {
+                border-left: 2px solid #6b8299 !important;
+            }
+            &.quarter_start_grid_cell {
+                border-left: 1.5px solid #8fa8bf !important;
+            }
+            &.month_start_grid_cell {
+                border-left: 1px solid #b8cad9 !important;
+            }
+            &.day_start_grid_cell {
+                border-left: 1px solid #cbd5e1 !important;
+            }
         }
 
         &.holiday_cell {
             background-color: #ffe6e4 !important; // Distinct soft red background for Lithuanian national holidays
             border-left: 1px dashed #e65c5c !important;
             border-right: 1px dashed #e65c5c !important;
+            cursor: help !important;
+
+            &.year_start_grid_cell {
+                border-left: 2px solid #6b8299 !important;
+            }
+            &.quarter_start_grid_cell {
+                border-left: 1.5px solid #8fa8bf !important;
+            }
+            &.month_start_grid_cell {
+                border-left: 1px solid #b8cad9 !important;
+            }
+            &.day_start_grid_cell {
+                border-left: 1px solid #cbd5e1 !important;
+            }
         }
 
         &.today_cell {
@@ -331,7 +573,7 @@
         top: 0;
         bottom: 0;
         width: 2px;
-        background-color: #dc3545;
+        background-color: var(--bs-danger, #dc3545);
         z-index: 10;
         pointer-events: none;
         box-shadow: 0 0 6px rgba(220, 53, 69, 0.6);
@@ -340,7 +582,7 @@
             position: absolute;
             top: 2px;
             left: 3px;
-            background-color: #dc3545;
+            background-color: var(--bs-danger, #dc3545);
             color: #ffffff;
             font-size: 10px;
             font-weight: 700;
@@ -351,17 +593,58 @@
         }
     }
 
+    /* Dynamic Vertical Hover Highlight (matches horizontal row highlight #71639e with 0.13 opacity) */
+    .custom_hover_vertical_highlight {
+        position: absolute;
+        top: 0;
+        left: 0;
+        background-color: rgba(113, 99, 158, 0.13) !important;
+        border-left: 1px dashed rgba(113, 99, 158, 0.45);
+        border-right: 1px dashed rgba(113, 99, 158, 0.45);
+        box-sizing: border-box;
+        pointer-events: none !important;
+        z-index: 3;
+        display: none;
+    }
+
+    .custom_hover_vertical_scale_highlight {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100% !important;
+        background-color: rgba(113, 99, 158, 0.13) !important;
+        border-left: 1px dashed rgba(113, 99, 158, 0.45);
+        border-right: 1px dashed rgba(113, 99, 158, 0.45);
+        box-sizing: border-box;
+        pointer-events: none !important;
+        z-index: 5;
+        display: none;
+    }
+
     /* Task Bars in Timeline (Odoo Community Purple #71639e & Green for Done) */
     .gantt_task_line {
         height: 34px !important;
         line-height: 34px !important;
         border-radius: 6px !important;
         border: 1px solid #5f5285 !important;
-        background-color: #71639e !important;
+        background-color: var(--bs-primary, #71639e) !important;
         color: #ffffff !important;
         box-shadow: 0 2px 4px rgba(113, 99, 158, 0.25) !important;
         font-size: 12px;
         font-weight: 600;
+        transition: box-shadow 0.12s ease, filter 0.12s ease;
+
+        &.gantt_hover_active {
+            box-shadow: 0 0 0 2.5px #71639e, 0 4px 12px rgba(113, 99, 158, 0.5) !important;
+            filter: brightness(1.08) !important;
+            z-index: 10 !important;
+        }
+
+        &.gantt_hover_child {
+            box-shadow: 0 0 0 2px rgba(113, 99, 158, 0.65), 0 2px 6px rgba(113, 99, 158, 0.3) !important;
+            filter: brightness(1.04) !important;
+            z-index: 9 !important;
+        }
 
         .gantt_task_content {
             position: absolute !important;
@@ -427,6 +710,35 @@
             }
         }
 
+        &.bar_ultra_compact {
+            min-width: 8px !important;
+            border-radius: 3px !important;
+
+            .gantt_task_content {
+                padding: 0 !important;
+            }
+
+            .gantt_task_drag {
+                width: 3px !important;
+                z-index: 6 !important;
+            }
+            .task_left, [data-bind-property="start_date"] {
+                left: 0 !important;
+            }
+            .task_right, [data-bind-property="end_date"] {
+                right: 0 !important;
+            }
+        }
+
+        &.bar_compact {
+            border-radius: 4px !important;
+
+            .gantt_task_content {
+                padding: 0 3px !important;
+                font-size: 10px !important;
+            }
+        }
+
         .gantt_task_progress {
             background-color: rgba(0, 0, 0, 0.22) !important;
             border-right: 2px solid rgba(255, 255, 255, 0.85);
@@ -475,7 +787,7 @@
             }
 
             &.project_done, &.project_state_done, &.project_status_done {
-                background-color: #16a34a !important;
+                background-color: var(--bs-success, #16a34a) !important;
                 border: 2px solid #ffffff !important;
                 box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 
@@ -528,7 +840,7 @@
             }
 
             &.milestone_done, &.milestone_state_done {
-                background-color: #16a34a !important;
+                background-color: var(--bs-success, #16a34a) !important;
                 border: 2px solid #ffffff !important;
                 box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 
@@ -542,7 +854,7 @@
         /* TASK STATUS STYLING */
         /* In Progress (Purple / standard) */
         &.task_in_progress, &.task_state_in_progress, &.task_standard {
-            background-color: #71639e !important;
+            background-color: var(--bs-primary, #71639e) !important;
             border: 1px solid #5c4f82 !important;
             box-shadow: 0 2px 4px rgba(113, 99, 158, 0.25) !important;
         }
@@ -563,7 +875,7 @@
 
         /* Cancelled (Red) */
         &.task_canceled, &.task_state_canceled {
-            background-color: #dc3545 !important;
+            background-color: var(--bs-danger, #dc3545) !important;
             border: 1px solid #b02a37 !important;
             box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3) !important;
         }
@@ -595,7 +907,7 @@
 
         /* Done / Atlikta (GREEN WITH WHITE BORDER AROUND) */
         &.task_done, &.task_state_done, &.project_done, &.project_state_done, &.milestone_done, &.milestone_state_done {
-            background-color: #16a34a !important;
+            background-color: var(--bs-success, #16a34a) !important;
             border: 2px solid #ffffff !important;
             box-shadow: 0 0 0 1px #15803d, 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 
@@ -625,7 +937,7 @@
         bottom: -1px;
         z-index: 10;
         border-radius: 0 6px 6px 0;
-        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+        background: var(--bs-danger, #dc3545) !important;
         border: 1px solid #b91c1c;
         border-left: 1px dashed rgba(255, 255, 255, 0.7);
         box-shadow: 0 2px 5px rgba(220, 38, 38, 0.35);
@@ -739,14 +1051,14 @@
 
         &:hover {
             background-color: rgba(113, 99, 158, 0.1);
-            color: #71639e;
+            color: var(--bs-primary, #71639e);
         }
 
         &[data-action="add_subtask"], &[data-action="add_task_to_project"], &[data-action="add_task_to_milestone"] {
-            color: #71639e;
+            color: var(--bs-primary, #71639e);
             font-weight: bold;
             &:hover {
-                background-color: #71639e;
+                background-color: var(--bs-primary, #71639e);
                 color: #ffffff;
             }
         }
@@ -762,7 +1074,7 @@
 
         &.text-danger:hover {
             background-color: #fee2e2;
-            color: #dc3545 !important;
+            color: var(--bs-danger, #dc3545) !important;
         }
     }
 }
@@ -797,7 +1109,7 @@ div.gantt_tooltip {
     .tooltip_title {
         font-size: 14px !important;
         font-weight: 700 !important;
-        color: #71639e !important;
+        color: var(--bs-primary, #71639e) !important;
         margin-bottom: 8px !important;
         border-bottom: 1px solid #e9ecef !important;
         padding-bottom: 6px !important;
@@ -908,81 +1220,12 @@ div.gantt_tooltip {
     cursor: default !important;
 }
 
-/* Live Task Timer Badge (next to Start / Pause / Finish buttons) */
+/* Live task timer badge: uses native Bootstrap/Odoo badge classes (see task_timer_widget.xml) */
 .o_task_timer_badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 13px;
-    line-height: 1.3;
-    vertical-align: middle;
-    transition: all 0.25s ease;
+    font-size: inherit;
     user-select: none;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 
-    &.running {
-        background-color: #ecfdf5;
-        border: 1.5px solid #10b981;
-        color: #047857;
-
-        .timer_digits {
-            color: #065f46;
-            letter-spacing: 0.8px;
-            font-size: 13px;
-        }
-
-        .timer_pulse_dot {
-            font-size: 8px;
-            display: inline-flex;
-            align-items: center;
-            animation: timerPulseDot 1.2s infinite ease-in-out;
-        }
-    }
-
-    &.paused {
-        background-color: #fffbeb;
-        border: 1.5px solid #f59e0b;
-        color: #b45309;
-
-        .timer_digits {
-            color: #92400e;
-            letter-spacing: 0.8px;
-            font-size: 13px;
-        }
-
-        .timer_icon {
-            font-size: 11px;
-        }
-    }
-
-    &.done {
-        background-color: #f0fdf4;
-        border: 1.5px solid #22c55e;
-        color: #15803d;
-
-        .timer_digits {
-            color: #15803d;
-            letter-spacing: 0.8px;
-            font-size: 13px;
-        }
-
-        .timer_icon {
-            font-size: 11px;
-        }
-    }
-
-    .timer_status_tag {
-        font-size: 10px;
-        font-weight: 600;
-        padding: 2px 6px;
-        border-radius: 4px;
+    .o_task_timer_dot {
+        font-size: 0.5rem;
     }
 }
-
-@keyframes timerPulseDot {
-    0% { transform: scale(0.9); opacity: 0.5; }
-    50% { transform: scale(1.3); opacity: 1; }
-    100% { transform: scale(0.9); opacity: 0.5; }
-}
-
