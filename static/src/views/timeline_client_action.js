@@ -3087,7 +3087,7 @@ export class GanntLTAction extends Component {
                     for (const cid of pChildren) {
                         const ct = g.getTask(cid);
                         if (!ct) continue;
-                        let eff = parseWorkDateStr(ct.work_end_date) || ct.end_date;
+                        let eff = parseWorkDateStr(ct.work_end_date) || (ct.work_start_date ? parseWorkDateStr(parent.work_end_date) : null);
                         if (ct.has_deadline_delay && ct.deadline_end) {
                             const cDl = ct.deadline_end instanceof Date
                                 ? ct.deadline_end
@@ -4004,8 +4004,8 @@ export class GanntLTAction extends Component {
             if (pTask) {
                 effProjectId = effProjectId || pTask.project_id || undefined;
                 effMilestoneId = effMilestoneId || pTask.milestone_id || undefined;
-                pWorkStart = pTask.planned_date_start || pTask.work_start_date || (pTask.start_date ? formatOdooDateTime(pTask.start_date) : null);
-                pWorkEnd = pTask.planned_date_end || pTask.work_end_date || (pTask.end_date ? formatOdooDateTime(pTask.end_date) : null);
+                pWorkStart = pTask.planned_date_start || pTask.work_start_date || null;
+                pWorkEnd = pTask.planned_date_end || pTask.work_end_date || null;
             }
         }
         effProjectId = effProjectId || (this.state.selectedProjectId > 0 ? this.state.selectedProjectId : undefined);

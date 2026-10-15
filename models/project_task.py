@@ -254,7 +254,7 @@ class ProjectTask(models.Model):
              "The system may update or clear it; a user typed deadline is never erased.",
     )
 
-    @api.depends("date_assign", "parent_id.planned_date_start")
+    @api.depends("parent_id", "date_assign", "parent_id.planned_date_start")
     def _compute_planned_date_start(self):
         """Default planned_date_start to parent task or date_assign if not already set."""
         for record in self.filtered(lambda x: not x.planned_date_start):
@@ -264,7 +264,7 @@ class ProjectTask(models.Model):
                 if not record.planned_date_end or record.planned_date_end >= record.date_assign:
                     record.planned_date_start = record.date_assign
 
-    @api.depends("date_end", "date_deadline", "parent_id.planned_date_end")
+    @api.depends("parent_id", "date_end", "date_deadline", "parent_id.planned_date_end")
     def _compute_planned_date_end(self):
         """Default planned_date_end to parent task, date_end or date_deadline if not already set."""
         for record in self.filtered(lambda x: not x.planned_date_end):
@@ -353,6 +353,38 @@ class ProjectTask(models.Model):
                   AND p.planned_date_start = sub.min_start
                   AND p.planned_date_end = sub.max_end
             """)
+        # Ensure any subtasks in DB without planned dates inherit from their parent task
+        cr.execute("""
+            UPDATE project_task c
+            SET planned_date_start = p.planned_date_start,
+                planned_date_end = p.planned_date_end,
+                plan_is_auto = TRUE
+            FROM project_task p
+            WHERE c.parent_id = p.id
+              AND c.active = TRUE
+              AND c.planned_date_start IS NULL
+              AND c.planned_date_end IS NULL
+              AND p.planned_date_start IS NOT NULL
+              AND p.planned_date_end IS NOT NULL;
+        """)
+
+        # Clean up stale auto-deadlines where no children overflow planned_date_end and no timer is running
+        cr.execute("""
+            UPDATE project_task
+            SET date_deadline = NULL,
+                deadline_is_auto = FALSE
+            WHERE deadline_is_auto = TRUE
+              AND (first_timer_start IS NULL)
+              AND planned_date_end IS NOT NULL
+              AND (
+                NOT EXISTS (
+                  SELECT 1 FROM project_task child
+                  WHERE child.parent_id = project_task.id
+                    AND child.active = TRUE
+                    AND COALESCE(child.date_deadline, child.planned_date_end) > project_task.planned_date_end
+                )
+              );
+        """)
         return res
 
     timer_start = fields.Datetime("Laikmačio pradžia / Timer Start", readonly=True, copy=False)
@@ -639,11 +671,16 @@ class ProjectTask(models.Model):
             return
         starts, ends, eff_ends = [], [], []
         for c in children:
-            if c.planned_date_start and c.planned_date_end:
-                starts.append(c.planned_date_start)
-                ends.append(c.planned_date_end)
-                eff = c.planned_date_end
-                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c.planned_date_end:
+            c_s = c.planned_date_start
+            c_e = c.planned_date_end
+            if not c_s and not c_e and self.planned_date_start and self.planned_date_end:
+                c_s = self.planned_date_start
+                c_e = self.planned_date_end
+            if c_s and c_e:
+                starts.append(c_s)
+                ends.append(c_e)
+                eff = c_e
+                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c_e:
                     eff = c.date_deadline
                 eff_ends.append(eff)
             elif c.date_deadline and isinstance(c.date_deadline, datetime):
@@ -769,6 +806,16 @@ class ProjectTask(models.Model):
     @api.model_create_multi
     def create(self, vals_list):
         for vals in vals_list:
+            if vals.get("parent_id") and not vals.get("planned_date_start") and not vals.get("planned_date_end"):
+                try:
+                    p = self.browse(vals["parent_id"])
+                    if p.exists() and p.planned_date_start and p.planned_date_end:
+                        vals["planned_date_start"] = p.planned_date_start
+                        vals["planned_date_end"] = p.planned_date_end
+                        vals["plan_is_auto"] = True
+                except Exception:
+                    pass
+
             self._normalize_form_datetime_vals(vals)
             # Auto-fill allocated_hours from actual working hours (darbo valandos)
             if "allocated_hours" not in vals:
@@ -792,6 +839,20 @@ class ProjectTask(models.Model):
         auto_ctx = bool(self.env.context.get("gannt_auto_plan"))
         if not auto_ctx:
             self._normalize_form_datetime_vals(vals)
+
+        if "parent_id" in vals and vals.get("parent_id") and "planned_date_start" not in vals and "planned_date_end" not in vals:
+            try:
+                p = self.browse(vals["parent_id"])
+                if p.exists() and p.planned_date_start and p.planned_date_end:
+                    for rec in self:
+                        if not rec.planned_date_start and not rec.planned_date_end:
+                            rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).write({
+                                "planned_date_start": p.planned_date_start,
+                                "planned_date_end": p.planned_date_end,
+                                "plan_is_auto": True,
+                            })
+            except Exception:
+                pass
 
         # A user (form, timeline drag) typing planned dates / a deadline makes them MANUAL.
         # Internal system writes pass context gannt_auto_plan and keep their own flags.
@@ -992,68 +1053,81 @@ class ProjectTask(models.Model):
 
         # Hierarchical task dates helper: container CANNOT be smaller than items inside it
         task_dates_cache = {}
+        visiting_tasks = set()
+
+        def get_task_base_dates(t):
+            """Returns the task's own base dates without recursing into subtasks."""
+            if t.planned_date_start:
+                s = utc_to_local_dt(self.env, t.planned_date_start)
+                if s.hour == 0 and s.minute == 0 and not t.plan_is_auto:
+                    s = s.replace(hour=8, minute=0, second=0)
+            else:
+                base_dt = utc_to_local_dt(self.env, t.date_assign or t.create_date or now)
+                s = datetime.combine(base_dt.date(), time(8, 0, 0))
+
+            if t.planned_date_end:
+                e = utc_to_local_dt(self.env, t.planned_date_end)
+                if (e.hour == 0 and e.minute == 0) or (e.hour == 23 and e.minute == 59):
+                    if not t.plan_is_auto:
+                        e = e.replace(hour=17, minute=0, second=0)
+            elif t.is_timer_running and t.planned_date_start:
+                e = s + timedelta(minutes=ceil_minutes_between(s, now_local))
+            elif t.date_deadline:
+                e = utc_to_local_dt(self.env, t.date_deadline) if isinstance(t.date_deadline, datetime) else datetime.combine(t.date_deadline, time(17, 0, 0))
+                if (e.hour == 0 and e.minute == 0) or (e.hour == 23 and e.minute == 59):
+                    e = e.replace(hour=17, minute=0, second=0)
+            else:
+                e = datetime.combine(s.date(), time(17, 0, 0))
+
+            if e < s:
+                e = s + timedelta(minutes=1)
+            return s, e
 
         def get_task_dates(t):
             if t.id in task_dates_cache:
                 return task_dates_cache[t.id]
+            if t.id in visiting_tasks:
+                return get_task_base_dates(t)
 
-            # If this is a subtask without explicit planned dates, inherit from parent task
-            if t.parent_id and not t.planned_date_start and not t.planned_date_end:
-                p_s, p_e = get_task_dates(t.parent_id)
-                t_s = p_s
-                t_e = p_e
+            visiting_tasks.add(t.id)
+            try:
+                # If this is a subtask without explicit planned dates, inherit strictly from parent task
+                if t.parent_id and not t.planned_date_start and not t.planned_date_end:
+                    p_s, p_e = get_task_dates(t.parent_id)
+                    t_s, t_e = p_s, p_e
+                    task_dates_cache[t.id] = (t_s, t_e)
+                    return t_s, t_e
+
+                t_s, t_e = get_task_base_dates(t)
+
+                if t.parent_id:
+                    # If start or end is not set, inherit from parent
+                    if not t.planned_date_start:
+                        p_s, _ = get_task_dates(t.parent_id)
+                        t_s = p_s
+                    if not t.planned_date_end and not t.date_deadline:
+                        _, p_e = get_task_dates(t.parent_id)
+                        t_e = max(t_s, p_e)
+
+                # Encompass subtasks ONLY for parents without a manual plan (auto plan / no plan).
+                # A parent with a manual plan keeps its own span; subtasks beyond it make a red tail instead.
+                subtasks = tasks.filtered(lambda s: s.parent_id.id == t.id)
+                manual_parent_plan = bool(t.planned_date_start and t.planned_date_end) and not t.plan_is_auto
+                if subtasks and not manual_parent_plan:
+                    sub_pairs = [get_task_dates(sub) for sub in subtasks if sub.id not in visiting_tasks]
+                    if sub_pairs:
+                        t_s = min(t_s, min(p[0] for p in sub_pairs))
+                        t_e = max(t_e, max(p[1] for p in sub_pairs))
+
+                if t_e < t_s:
+                    t_e = datetime.combine(t_s.date(), time(17, 0, 0))
+                    if t_e <= t_s:
+                        t_e = datetime.combine(t_s.date() + timedelta(days=1), time(17, 0, 0))
+
                 task_dates_cache[t.id] = (t_s, t_e)
                 return t_s, t_e
-
-            # User-assigned or default start (converted from UTC to user local timezone)
-            if t.planned_date_start:
-                t_s = utc_to_local_dt(self.env, t.planned_date_start)
-                if t_s.hour == 0 and t_s.minute == 0 and not t.plan_is_auto:
-                    t_s = t_s.replace(hour=8, minute=0, second=0)
-            elif t.parent_id:
-                p_s, _ = get_task_dates(t.parent_id)
-                t_s = p_s
-            else:
-                base_dt = utc_to_local_dt(self.env, t.date_assign or t.create_date or now)
-                t_s = datetime.combine(base_dt.date(), time(8, 0, 0))
-
-            # User-assigned or default end (converted from UTC to user local timezone)
-            if t.planned_date_end:
-                t_e = utc_to_local_dt(self.env, t.planned_date_end)
-                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 23 and t_e.minute == 59):
-                    if not t.plan_is_auto:
-                        t_e = t_e.replace(hour=17, minute=0, second=0)
-            elif t.is_timer_running and t.planned_date_start:
-                # R1 live: no end yet, the bar grows with the running timer (whole minutes, min 1)
-                t_e = t_s + timedelta(minutes=ceil_minutes_between(t_s, now_local))
-            elif t.date_deadline:
-                t_e = utc_to_local_dt(self.env, t.date_deadline) if isinstance(t.date_deadline, datetime) else datetime.combine(t.date_deadline, time(17, 0, 0))
-                if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 23 and t_e.minute == 59):
-                    t_e = t_e.replace(hour=17, minute=0, second=0)
-            elif t.parent_id:
-                _, p_e = get_task_dates(t.parent_id)
-                t_e = max(t_s, p_e)
-            else:
-                # If task has NO end date and NO deadline:
-                # Takes span of exactly one day on the timeline (same day 17:00)
-                t_e = datetime.combine(t_s.date(), time(17, 0, 0))
-
-            # Encompass subtasks ONLY for parents without a manual plan (auto plan / no plan).
-            # A parent with a manual plan keeps its own span; subtasks beyond it make a red tail instead.
-            subtasks = tasks.filtered(lambda s: s.parent_id.id == t.id)
-            manual_parent_plan = bool(t.planned_date_start and t.planned_date_end) and not t.plan_is_auto
-            if subtasks and not manual_parent_plan:
-                sub_pairs = [get_task_dates(sub) for sub in subtasks]
-                t_s = min(t_s, min(p[0] for p in sub_pairs))
-                t_e = max(t_e, max(p[1] for p in sub_pairs))
-
-            if t_e < t_s:
-                t_e = datetime.combine(t_s.date(), time(17, 0, 0))
-                if t_e <= t_s:
-                    t_e = datetime.combine(t_s.date() + timedelta(days=1), time(17, 0, 0))
-
-            task_dates_cache[t.id] = (t_s, t_e)
-            return t_s, t_e
+            finally:
+                visiting_tasks.discard(t.id)
 
         # Hierarchical progress calculation helper
         task_metrics_cache = {}
@@ -1133,7 +1207,7 @@ class ProjectTask(models.Model):
             deadline_out = own_dl
 
             has_plan = manual or bool(task_obj.parent_id) or bool(children)
-            if own_dl and own_dl > eff_end and has_plan and not task_obj.plan_is_auto:
+            if own_dl and own_dl > eff_end and has_plan and not task_obj.deadline_is_auto:
                 eff_end = own_dl
                 kind = "late"
             if task_obj.is_timer_running and has_plan and now_local > eff_end:
@@ -1180,7 +1254,7 @@ class ProjectTask(models.Model):
 
             t_start, t_end = get_task_dates(t)
             subtasks = tasks.filtered(lambda s: s.parent_id.id == t.id)
-            has_dates = bool((t.planned_date_start and t.planned_date_end) or t.date_deadline or subtasks)
+            has_dates = bool((t.planned_date_start and t.planned_date_end) or t.date_deadline or t.parent_id or subtasks)
 
             # Auto-fill task allocated_hours directly from darbo valandos (working hours) if unset or 0.0
             # If task has NO planned dates and NO deadline: it shouldn't show hours!
