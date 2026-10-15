@@ -1565,6 +1565,7 @@ export class GanntLTAction extends Component {
         g.config.start_on_monday = true;
         g.config.open_tree_init = false;
         g.config.fit_tasks = false;
+        g.config.show_tasks_outside_timescale = true;
         g.config.autoscroll = true;
         g.config.autoscroll_speed = 30;
         g.config.drag_links = true;
@@ -4806,7 +4807,6 @@ export class GanntLTAction extends Component {
         }
 
         if (!targetTask) {
-            this.resetView();
             return;
         }
 
