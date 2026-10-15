@@ -2490,15 +2490,24 @@ export class GanntLTAction extends Component {
                         candidateStart = new Date(task.end_date.getTime() - minDurMs);
                     }
 
-                    // Ancestor container extension: extending start date expands parent containers in real-time
-                    let curAncId = task.parent;
-                    while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
-                        const anc = g.getTask(curAncId);
-                        if (anc && anc.start_date && candidateStart < anc.start_date) {
-                            anc.start_date = new Date(candidateStart);
-                            g.refreshTask(curAncId);
+                    // Strict parent boundary check: subtask start cannot be before parent start
+                    const isSubtaskOfTask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+                    if (isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+                        const pTask = g.getTask(task.parent);
+                        if (pTask && pTask.start_date && candidateStart.getTime() < pTask.start_date.getTime()) {
+                            candidateStart = new Date(pTask.start_date);
                         }
-                        curAncId = anc.parent;
+                    } else {
+                        // Ancestor container extension: extending start date expands parent containers in real-time
+                        let curAncId = task.parent;
+                        while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                            const anc = g.getTask(curAncId);
+                            if (anc && anc.start_date && candidateStart < anc.start_date) {
+                                anc.start_date = new Date(candidateStart);
+                                g.refreshTask(curAncId);
+                            }
+                            curAncId = anc.parent;
+                        }
                     }
 
                     task.start_date = candidateStart;
@@ -2539,15 +2548,24 @@ export class GanntLTAction extends Component {
                         candidateEnd = new Date(task.start_date.getTime() + minDurMs);
                     }
 
-                    // Ancestor container extension: extending end date expands parent containers in real-time
-                    let curAncId = task.parent;
-                    while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
-                        const anc = g.getTask(curAncId);
-                        if (anc && anc.end_date && candidateEnd > anc.end_date) {
-                            anc.end_date = new Date(candidateEnd);
-                            g.refreshTask(curAncId);
+                    // Strict parent boundary check: subtask planned end cannot be after parent planned end
+                    const isSubtaskOfTask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
+                    if (isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+                        const pTask = g.getTask(task.parent);
+                        if (pTask && pTask.end_date && candidateEnd.getTime() > pTask.end_date.getTime()) {
+                            candidateEnd = new Date(pTask.end_date);
                         }
-                        curAncId = anc.parent;
+                    } else {
+                        // Ancestor container extension: extending end date expands parent containers in real-time
+                        let curAncId = task.parent;
+                        while (curAncId && g.isTaskExists && g.isTaskExists(curAncId)) {
+                            const anc = g.getTask(curAncId);
+                            if (anc && anc.end_date && candidateEnd > anc.end_date) {
+                                anc.end_date = new Date(candidateEnd);
+                                g.refreshTask(curAncId);
+                            }
+                            curAncId = anc.parent;
+                        }
                     }
 
                     task.end_date = candidateEnd;
@@ -2755,22 +2773,33 @@ export class GanntLTAction extends Component {
                 zoomLevel,
             });
 
-            // Strict parent boundary rule: subtask cannot be moved outside parent task boundaries
-            if (mode === "move" && isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
+            // Strict parent boundary rule: subtask cannot be moved or resized outside parent task boundaries
+            if (isSubtaskOfTask && g.isTaskExists && g.isTaskExists(task.parent)) {
                 const pTask = g.getTask(task.parent);
                 const pWS = parseWorkDateStr(pTask.work_start_date);
                 const pWE = parseWorkDateStr(pTask.work_end_date);
                 if (pWS && pWE) {
-                    const taskDurMs = workEnd.getTime() - workStart.getTime();
-                    if (workStart.getTime() < pWS.getTime()) {
-                        workStart = new Date(pWS);
-                        workEnd = new Date(workStart.getTime() + taskDurMs);
-                        changed = true;
-                    }
-                    if (workEnd.getTime() > pWE.getTime()) {
-                        workEnd = new Date(pWE);
-                        workStart = new Date(Math.max(pWS.getTime(), workEnd.getTime() - taskDurMs));
-                        changed = true;
+                    if (mode === "move") {
+                        const taskDurMs = workEnd.getTime() - workStart.getTime();
+                        if (workStart.getTime() < pWS.getTime()) {
+                            workStart = new Date(pWS);
+                            workEnd = new Date(workStart.getTime() + taskDurMs);
+                            changed = true;
+                        }
+                        if (workEnd.getTime() > pWE.getTime()) {
+                            workEnd = new Date(pWE);
+                            workStart = new Date(Math.max(pWS.getTime(), workEnd.getTime() - taskDurMs));
+                            changed = true;
+                        }
+                    } else if (mode === "resize") {
+                        if (workStart.getTime() < pWS.getTime()) {
+                            workStart = new Date(pWS);
+                            changed = true;
+                        }
+                        if (workEnd.getTime() > pWE.getTime()) {
+                            workEnd = new Date(pWE);
+                            changed = true;
+                        }
                     }
                 }
             } else if (task.parent && g.isTaskExists && g.isTaskExists(task.parent)) {
@@ -3967,12 +3996,16 @@ export class GanntLTAction extends Component {
     addSubtaskDialog(parentTaskId, projectId, milestoneId) {
         let effProjectId = projectId;
         let effMilestoneId = milestoneId;
+        let pWorkStart = null;
+        let pWorkEnd = null;
         const taskKey = `task_${parentTaskId}`;
         if (this.gantt && this.gantt.isTaskExists(taskKey)) {
             const pTask = this.gantt.getTask(taskKey);
             if (pTask) {
                 effProjectId = effProjectId || pTask.project_id || undefined;
                 effMilestoneId = effMilestoneId || pTask.milestone_id || undefined;
+                pWorkStart = pTask.planned_date_start || pTask.work_start_date || (pTask.start_date ? formatOdooDateTime(pTask.start_date) : null);
+                pWorkEnd = pTask.planned_date_end || pTask.work_end_date || (pTask.end_date ? formatOdooDateTime(pTask.end_date) : null);
             }
         }
         effProjectId = effProjectId || (this.state.selectedProjectId > 0 ? this.state.selectedProjectId : undefined);
@@ -3989,6 +4022,8 @@ export class GanntLTAction extends Component {
                     default_parent_id: parentTaskId,
                     ...(effProjectId ? { default_project_id: effProjectId } : {}),
                     ...(effMilestoneId ? { default_milestone_id: effMilestoneId } : {}),
+                    ...(pWorkStart ? { default_planned_date_start: pWorkStart } : {}),
+                    ...(pWorkEnd ? { default_planned_date_end: pWorkEnd } : {}),
                 },
             },
             {

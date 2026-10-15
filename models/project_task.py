@@ -227,6 +227,7 @@ class ProjectTask(models.Model):
         store=True,
         readonly=False,
         precompute=True,
+        recursive=True,
         copy=False,
     )
     planned_date_end = fields.Datetime(
@@ -235,6 +236,7 @@ class ProjectTask(models.Model):
         store=True,
         readonly=False,
         precompute=True,
+        recursive=True,
         copy=False,
     )
     plan_is_auto = fields.Boolean(
@@ -252,22 +254,28 @@ class ProjectTask(models.Model):
              "The system may update or clear it; a user typed deadline is never erased.",
     )
 
-    @api.depends("date_assign")
+    @api.depends("date_assign", "parent_id.planned_date_start")
     def _compute_planned_date_start(self):
-        """Default planned_date_start to date_assign if not already set."""
-        for record in self.filtered(lambda x: not x.planned_date_start and x.date_assign):
-            if not record.planned_date_end or record.planned_date_end >= record.date_assign:
-                record.planned_date_start = record.date_assign
+        """Default planned_date_start to parent task or date_assign if not already set."""
+        for record in self.filtered(lambda x: not x.planned_date_start):
+            if record.parent_id and record.parent_id.planned_date_start:
+                record.planned_date_start = record.parent_id.planned_date_start
+            elif record.date_assign:
+                if not record.planned_date_end or record.planned_date_end >= record.date_assign:
+                    record.planned_date_start = record.date_assign
 
-    @api.depends("date_end", "date_deadline")
+    @api.depends("date_end", "date_deadline", "parent_id.planned_date_end")
     def _compute_planned_date_end(self):
-        """Default planned_date_end to date_end or date_deadline if not already set."""
+        """Default planned_date_end to parent task, date_end or date_deadline if not already set."""
         for record in self.filtered(lambda x: not x.planned_date_end):
-            target = record.date_end or record.date_deadline
-            if target:
-                target_dt = target if isinstance(target, datetime) else datetime.combine(target, time(17, 0, 0))
-                if not record.planned_date_start or record.planned_date_start <= target_dt:
-                    record.planned_date_end = target_dt
+            if record.parent_id and record.parent_id.planned_date_end:
+                record.planned_date_end = record.parent_id.planned_date_end
+            else:
+                target = record.date_end or record.date_deadline
+                if target:
+                    target_dt = target if isinstance(target, datetime) else datetime.combine(target, time(17, 0, 0))
+                    if not record.planned_date_start or record.planned_date_start <= target_dt:
+                        record.planned_date_end = target_dt
 
     @api.constrains("planned_date_start", "planned_date_end")
     def _check_planned_dates(self):
@@ -631,19 +639,15 @@ class ProjectTask(models.Model):
             return
         starts, ends, eff_ends = [], [], []
         for c in children:
-            c_s = c.planned_date_start or c.date_assign or c.create_date
-            if c_s:
-                starts.append(c_s)
-            c_e = c.planned_date_end
-            if not c_e and c_s:
-                c_s_loc = utc_to_local_dt(self.env, c_s)
-                c_e = local_to_utc_dt(self.env, datetime.combine(c_s_loc.date(), time(17, 0, 0)))
-            if c_e:
-                ends.append(c_e)
-                eff = c_e
-                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c_e:
+            if c.planned_date_start and c.planned_date_end:
+                starts.append(c.planned_date_start)
+                ends.append(c.planned_date_end)
+                eff = c.planned_date_end
+                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c.planned_date_end:
                     eff = c.date_deadline
                 eff_ends.append(eff)
+            elif c.date_deadline and isinstance(c.date_deadline, datetime):
+                eff_ends.append(c.date_deadline)
 
         vals = {}
         manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
@@ -993,11 +997,22 @@ class ProjectTask(models.Model):
             if t.id in task_dates_cache:
                 return task_dates_cache[t.id]
 
+            # If this is a subtask without explicit planned dates, inherit from parent task
+            if t.parent_id and not t.planned_date_start and not t.planned_date_end:
+                p_s, p_e = get_task_dates(t.parent_id)
+                t_s = p_s
+                t_e = p_e
+                task_dates_cache[t.id] = (t_s, t_e)
+                return t_s, t_e
+
             # User-assigned or default start (converted from UTC to user local timezone)
             if t.planned_date_start:
                 t_s = utc_to_local_dt(self.env, t.planned_date_start)
                 if t_s.hour == 0 and t_s.minute == 0 and not t.plan_is_auto:
                     t_s = t_s.replace(hour=8, minute=0, second=0)
+            elif t.parent_id:
+                p_s, _ = get_task_dates(t.parent_id)
+                t_s = p_s
             else:
                 base_dt = utc_to_local_dt(self.env, t.date_assign or t.create_date or now)
                 t_s = datetime.combine(base_dt.date(), time(8, 0, 0))
@@ -1015,6 +1030,9 @@ class ProjectTask(models.Model):
                 t_e = utc_to_local_dt(self.env, t.date_deadline) if isinstance(t.date_deadline, datetime) else datetime.combine(t.date_deadline, time(17, 0, 0))
                 if (t_e.hour == 0 and t_e.minute == 0) or (t_e.hour == 23 and t_e.minute == 59):
                     t_e = t_e.replace(hour=17, minute=0, second=0)
+            elif t.parent_id:
+                _, p_e = get_task_dates(t.parent_id)
+                t_e = max(t_s, p_e)
             else:
                 # If task has NO end date and NO deadline:
                 # Takes span of exactly one day on the timeline (same day 17:00)
@@ -1114,10 +1132,11 @@ class ProjectTask(models.Model):
             kind = ""
             deadline_out = own_dl
 
-            if own_dl and own_dl > eff_end and (manual or children):
+            has_plan = manual or bool(task_obj.parent_id) or bool(children)
+            if own_dl and own_dl > eff_end and has_plan and not task_obj.plan_is_auto:
                 eff_end = own_dl
                 kind = "late"
-            if task_obj.is_timer_running and manual and now_local > eff_end:
+            if task_obj.is_timer_running and has_plan and now_local > eff_end:
                 eff_end = floor_minute(now_local) + timedelta(minutes=1)
                 kind = "timer"
             for child in children:
