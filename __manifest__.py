@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 {
-    "name": "GanntLT 2.1",
-    "summary": "GanntLT 2.1 - Interaktyvus projektų ir užduočių Gantt tvarkaraštis (Timeline)",
+    "name": "GanntLT 2.2",
+    "summary": "GanntLT 2.2 - Interaktyvus projektų ir užduočių Gantt tvarkaraštis (Timeline)",
     "description": """
-GanntLT 2.1 - Pažangus Gantt tvarkaraštis projektams ir užduotims
+GanntLT 2.2 - Pažangus Gantt tvarkaraštis projektams ir užduotims
 ================================================================
 
 Idėjos autorius ir savininkas:
@@ -16,7 +16,7 @@ Benas Jasiulis
 * Automatiškai sukuria planuojamų datų laukus (planned_date_start, planned_date_end) su integruotu daterange pasirinkimu.
 * Integruoja modernų DHTMLX Gantt (Timeline) vaizdą tiesiogiai į Odoo projektus ir užduotis.
 
-Pagrindinės funkcijos (v2.1):
+Pagrindinės funkcijos (v2.2):
 ----------------------------
 * Interaktyvus vilkimas (Drag-and-Drop) ir trukmės keitimas dešine rankenėle realiuoju laiku.
 * Pilnas veiksmų atšaukimas (Undo / Atšaukti mygtukas ir Ctrl+Z trumpinys iki 50 veiksmų).
@@ -27,7 +27,9 @@ Pagrindinės funkcijos (v2.1):
 * Dinaminis kalibruotas mastelis: 24 zoom lygiai nuo 0% iki 100% (Metai, Pusmečiai, Mėnesiai, Savaitės, Dienos, Valandos, 30m, 15m, 1m) su nuliniu antraščių persidengimu.
 * Pažymėti savaitgaliai ir Lietuvos valstybinės šventės.
 * Darbo valandų (8:00 - 17:00, 8 val./d.) vizualinis išskyrimas bei interaktyvus konfigūravimo popover langas su localStorage išsaugojimu.
-* Tiksli terminų ir vėlavimo logika (R1, R2, R3 taisyklės) su raudonomis vėlavimo uodegėlėmis bei kaskadavimu tėvams.
+* Tiksli terminų ir vėlavimo logika (R1, R2, R3 taisyklės) su raudonomis vėlavimo uodegėlėmis (+ uodegėlė) bei kaskadavimu tėvams.
+* Ankstyvo atlikimo indikatorius (- uodegėlė) atlikus užduotis anksčiau numatytos datos, nesutraukiant planuotos juostos.
+* Išspręstas hierarchinis konfliktas: vėlavimas griežtai dominuoja tėvinį konteinerį, anuliuodamas ankstyvumą, jei bent viena sub-užduotis viršija planą.
 * Minučių apvalinimas į viršų (Ceil Rounding, min. 1 min., 15s -> 1 min.) ir aiškios užvedimo kortelės be trupmeninių 0.1h.
 * Gimtoji Odoo MRP sąsaja: Pradėti (btn-primary), Pauzė (btn-warning) su Odoo pauzės vedliu ir Baigti (btn-success).
 * Tiesioginis realaus laiko chronometras (Laikmatis) su darbo žiniaraščių (Timesheets) automatine integracija.
@@ -36,7 +38,7 @@ Pagrindinės funkcijos (v2.1):
 * Greitas eksportas į PDF, didelės raiškos PNG paveikslėlį ir Excel (.xlsx).
 * Vartotojų prieigos teisės: GanntLT: Can View ir GanntLT: Can Edit.
 """,
-    "version": "2.1.0",
+    "version": "2.2.0",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",

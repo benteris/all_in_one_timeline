@@ -1792,6 +1792,16 @@ export class GanntLTAction extends Component {
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. dienos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkDays} d.</span></div>`;
                 deadlineHtml += `<div class="tooltip_row tooltip_delay_row"><span class="tooltip_label">Vėlavimo d. valandos:</span> <span class="tooltip_val text-danger fw-bold">${delayWorkHours > 0 ? formatDurationMinutes(Math.round(delayWorkHours * 60)) : "0 min"}</span></div>`;
             }
+            if (task.has_early_finish && !task.has_deadline_delay && task.early_minutes > 0) {
+                if (task.actual_finish_date) {
+                    const actD = task.actual_finish_date instanceof Date ? task.actual_finish_date : new Date(String(task.actual_finish_date).replace(/-/g, "/"));
+                    if (!isNaN(actD.getTime())) {
+                        deadlineHtml += `<div class="tooltip_row tooltip_early_row"><span class="tooltip_label">Faktinė pabaiga:</span> <span class="tooltip_val">${g.templates.tooltip_date_format(actD)}</span></div>`;
+                    }
+                }
+                const earlyStr = `-${formatDurationMinutes(task.early_minutes)}`;
+                deadlineHtml += `<div class="tooltip_row tooltip_early_row"><span class="tooltip_label">Atlikta anksčiau:</span> <span class="tooltip_val text-success fw-bold">${earlyStr}</span></div>`;
+            }
             const getStatusBadge = (t) => {
                 if (t.is_project) {
                     const pStatus = t.last_update_status || "";
@@ -2030,27 +2040,90 @@ export class GanntLTAction extends Component {
             const barWidthPx = getBarWidthPx(start || task.start_date, end || task.end_date);
             const hoursBadge = (task.allocated_hours && barWidthPx >= 110) ? ` <span class="bar_hours_badge">(${task.allocated_hours})</span>` : "";
 
+            // Early finish tail ("- uodegėlė"): drawn inside the right part of the bar
+            let earlyBarHtml = "";
+            let earlyWidthPx = 0;
+            if (task.has_early_finish && !task.has_deadline_delay) {
+                let earlyMin = Number(task.early_minutes) || 0;
+                const actEnd = task.actual_finish_date
+                    ? (task.actual_finish_date instanceof Date ? task.actual_finish_date : new Date(String(task.actual_finish_date).replace(/-/g, "/")))
+                    : null;
+                if (!earlyMin && actEnd && !isNaN(actEnd.getTime())) {
+                    const realWorkEnd = parseWorkDateStr(task.work_end_date) || (end || task.end_date);
+                    if (realWorkEnd && realWorkEnd.getTime() > actEnd.getTime()) {
+                        earlyMin = Math.max(1, Math.ceil((realWorkEnd.getTime() - actEnd.getTime()) / 60000));
+                    }
+                }
+
+                if (earlyMin > 0) {
+                    const diffMs = earlyMin * 60000;
+                    const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, this.getTimelineVisibleWidth());
+                    const barEndRef = end || task.end_date;
+                    let posDiff = 0;
+                    if (actEnd && !isNaN(actEnd.getTime()) && barEndRef) {
+                        const barEndPx = this.safePosFromDate(barEndRef);
+                        const actEndPx = this.safePosFromDate(actEnd);
+                        if (barEndPx >= 0 && actEndPx >= 0 && barEndPx > actEndPx) {
+                            posDiff = Math.round(barEndPx - actEndPx);
+                        }
+                    }
+
+                    if (isExactTimeResolution(this.state.zoomLevel)) {
+                        const pxPerHour = pxPerDay / 24.0;
+                        const calcPx = Math.round((diffMs / 3600000.0) * pxPerHour);
+                        earlyWidthPx = Math.max(18, posDiff > 0 ? posDiff : calcPx);
+                    } else {
+                        const diffDays = Math.max(0.25, diffMs / 86400000.0);
+                        earlyWidthPx = Math.max(18, posDiff, Math.round(diffDays * pxPerDay));
+                    }
+
+                    // Strict clamping: never let early finish bar overflow the main task bar
+                    if (barWidthPx > 36) {
+                        earlyWidthPx = Math.min(earlyWidthPx, barWidthPx - 28);
+                    } else {
+                        earlyWidthPx = Math.min(earlyWidthPx, Math.max(0, barWidthPx - 6));
+                    }
+
+                    if (earlyWidthPx > 0) {
+                        const earlyText = `-${formatDurationMinutes(earlyMin)}`;
+                        const badgeText = earlyWidthPx >= 38
+                            ? `<i class="fa fa-clock-o me-1"></i>${earlyText}`
+                            : (earlyWidthPx >= 18 ? earlyText : "");
+                        earlyBarHtml = `
+                            <div class="timeline_early_finish_bar" style="position: absolute; right: 0; top: -1px; width: ${earlyWidthPx}px; height: calc(100% + 2px);">
+                                <span class="early_badge">${badgeText}</span>
+                            </div>
+                        `;
+                    }
+                }
+            }
+
+            const contentPaddingStyle = earlyWidthPx > 0 ? `style="padding-right: ${earlyWidthPx + 4}px !important;"` : "";
+
             if (barWidthPx < 24) {
                 return `
                     <span class="bar_content_wrapper bar_content_empty"></span>
+                    ${earlyBarHtml}
                     ${delayBarHtml}
                 `;
             }
 
             if (barWidthPx < 56) {
                 return `
-                    <span class="bar_content_wrapper">
+                    <span class="bar_content_wrapper" ${contentPaddingStyle}>
                         <span class="bar_text">${statusIcon}${task.text}</span>
                     </span>
+                    ${earlyBarHtml}
                     ${delayBarHtml}
                 `;
             }
 
             return `
-                <span class="bar_content_wrapper">
+                <span class="bar_content_wrapper" ${contentPaddingStyle}>
                     <span class="bar_text">${statusIcon}${task.text}${hoursBadge}</span>
                     <span class="${badgeClass}">${percent}%</span>
                 </span>
+                ${earlyBarHtml}
                 ${delayBarHtml}
             `;
         };
@@ -2074,7 +2147,7 @@ export class GanntLTAction extends Component {
                 barWidthPx = 100;
             }
             const sizeClass = barWidthPx < 24 ? " bar_ultra_compact" : (barWidthPx < 56 ? " bar_compact" : "");
-            const extraClass = (task.has_deadline_delay ? " has_deadline_delay" : "") + sizeClass;
+            const extraClass = (task.has_deadline_delay ? " has_deadline_delay" : "") + (task.has_early_finish ? " has_early_finish" : "") + sizeClass;
             const state = task.state || (task.is_done ? "1_done" : "01_in_progress");
 
             if (task.is_project) {
@@ -3119,12 +3192,58 @@ export class GanntLTAction extends Component {
                         parent.delay_minutes = Math.max(1, Math.ceil(diffMs / 60000));
                         parent.delay_days = Math.floor(diffMs / 86400000);
                         parent.delay_hours = Math.round((diffMs / 3600000) * 10) / 10;
+                        // Hierarchy conflict rule: Lateness strictly dominates!
+                        parent.has_early_finish = false;
+                        parent.early_minutes = 0;
+                        parent.early_hours = 0;
+                        parent.early_days = 0;
                     } else {
                         parent.has_deadline_delay = false;
                         parent.delay_kind = "";
                         parent.delay_minutes = 0;
                         parent.delay_days = 0;
                         parent.delay_hours = 0;
+
+                        // Check if all children are finished and completed early
+                        let nonCanceledCount = 0;
+                        let allFinished = true;
+                        let maxChildFinish = null;
+                        for (const cid of pChildren) {
+                            const ct = g.getTask(cid);
+                            if (!ct || ct.state === "1_canceled") continue;
+                            nonCanceledCount++;
+                            const isChildDone = ct.state === "03_approved" || ct.state === "1_done" || ct.is_done;
+                            if (!isChildDone) {
+                                allFinished = false;
+                                break;
+                            }
+                            let cFinish = null;
+                            if (ct.has_deadline_delay && ct.deadline_end) {
+                                cFinish = ct.deadline_end instanceof Date ? ct.deadline_end : new Date(String(ct.deadline_end).replace(/-/g, "/"));
+                            } else if (ct.actual_finish_date) {
+                                cFinish = ct.actual_finish_date instanceof Date ? ct.actual_finish_date : new Date(String(ct.actual_finish_date).replace(/-/g, "/"));
+                            } else if (ct.work_end_date) {
+                                cFinish = parseWorkDateStr(ct.work_end_date);
+                            }
+                            if (cFinish && !isNaN(cFinish.getTime())) {
+                                if (!maxChildFinish || cFinish.getTime() > maxChildFinish.getTime()) {
+                                    maxChildFinish = cFinish;
+                                }
+                            }
+                        }
+                        if (nonCanceledCount > 0 && allFinished && maxChildFinish && parentWorkEnd && maxChildFinish.getTime() < parentWorkEnd.getTime()) {
+                            const earlyDiffMs = parentWorkEnd.getTime() - maxChildFinish.getTime();
+                            parent.has_early_finish = true;
+                            parent.actual_finish_date = formatOdooDateTime(maxChildFinish);
+                            parent.early_minutes = Math.max(1, Math.ceil(earlyDiffMs / 60000));
+                            parent.early_hours = Math.round((earlyDiffMs / 3600000) * 10) / 10;
+                            parent.early_days = Math.floor(earlyDiffMs / 86400000);
+                        } else {
+                            parent.has_early_finish = false;
+                            parent.early_minutes = 0;
+                            parent.early_hours = 0;
+                            parent.early_days = 0;
+                        }
                     }                    if (!needsScaleExpand) {
                         g.updateTask(currParentId);
                     }
