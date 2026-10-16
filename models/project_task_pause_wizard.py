@@ -98,20 +98,17 @@ class ProjectTaskPauseWizard(models.TransientModel):
             except Exception as e:
                 _logger.warning("Could not create timesheet line on pause: %s", e)
 
-        # 2. Post to Chatter with reason and duration
+        # 2. Post to Chatter with 1-line format: [Users name] Pristabdyta YYYY.MM.DD -HH:MM [Priežastis]
         user_name = self.env.user.name
         tz = self.env.user.tz or self.env.context.get("tz") or "Europe/Vilnius"
         try:
-            pause_time_str = format_datetime(self.env, now, tz=tz, dt_format="yyyy-MM-dd HH:mm:ss")
+            pause_time_str = format_datetime(self.env, now, tz=tz, dt_format="yyyy.MM.dd -HH:mm")
         except Exception:
-            pause_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+            pause_time_str = now.strftime("%Y.%m.%d -%H:%M")
 
-        chatter_body = (
-            f"⏸️ <b>Darbai pristabdyti (Task Paused):</b> {user_name} pristabdė darbą [{pause_time_str}].<br/>"
-            f"• <b>Užregistruota darbo žiniaraštyje (Timesheets):</b> {elapsed_min} min. (faktiškai {dur_str})<br/>"
-            f"• <b>Priežastis:</b> {self.reason}"
-        )
-        task.message_post(body=Markup(chatter_body), subtype_xmlid="mail.mt_note")
+        reason_clean = " ".join((self.reason or "").splitlines()).strip()
+        chatter_body = f"{user_name} Pristabdyta {pause_time_str} {reason_clean}".strip()
+        task.message_post(body=chatter_body, subtype_xmlid="mail.mt_note")
 
         # 3. Update task timer state and accumulated seconds
         pause_vals = {
@@ -121,7 +118,7 @@ class ProjectTaskPauseWizard(models.TransientModel):
         }
         stop_vals, _info = task._work_stop_vals(now, new_total_sec, finished=False)
         pause_vals.update(stop_vals)
-        task.with_context(gannt_auto_plan=True).write(pause_vals)
-        task._propagate_deadline_upward()
+        task.with_context(gannt_auto_plan=True, mail_notrack=True).write(pause_vals)
+        task.with_context(mail_notrack=True)._propagate_deadline_upward()
 
         return {"type": "ir.actions.act_window_close"}

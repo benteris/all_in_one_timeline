@@ -58,25 +58,25 @@
                         string="Pradėti"
                         class="btn-primary"
                         icon="fa-play"
-                        invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
+                        invisible="is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
                         string="Pristabdyti"
                         class="btn-secondary"
                         icon="fa-pause"
-                        invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
+                        invisible="not is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
                         string="Baigti"
                         class="btn-success"
                         icon="fa-check"
-                        invisible="state in ['1_done', '1_canceled']"/>
+                        invisible="state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_reopen"
                         type="object"
                         string="Atnaujinti"
                         class="btn-secondary"
                         icon="fa-undo"
-                        invisible="state not in ['1_done', '1_canceled']"/>
+                        invisible="state not in ['03_approved', '1_done', '1_canceled']"/>
                 <widget name="task_timer_widget"/>
             </xpath>
 
@@ -109,19 +109,25 @@
                         title="Pradėti"
                         class="btn-success px-2"
                         icon="fa-play"
-                        invisible="is_timer_running or state in ['1_done', '1_canceled']"/>
+                        invisible="is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
                         title="Pristabdyti"
                         class="btn-warning px-2"
                         icon="fa-pause"
-                        invisible="not is_timer_running or state in ['1_done', '1_canceled']"/>
+                        invisible="not is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
                         title="Baigti"
                         class="btn-success px-2"
                         icon="fa-check"
-                        invisible="state in ['1_done', '1_canceled']"/>
+                        invisible="state in ['03_approved', '1_done', '1_canceled']"/>
+                <button name="action_timer_reopen"
+                        type="object"
+                        title="Atnaujinti"
+                        class="btn-secondary px-2"
+                        icon="fa-refresh"
+                        invisible="state not in ['03_approved', '1_done']"/>
                 <widget name="task_timer_widget" string="Laikmatis"/>
             </xpath>
         </field>

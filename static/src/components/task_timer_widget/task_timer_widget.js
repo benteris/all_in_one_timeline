@@ -110,7 +110,7 @@ export class TaskTimerWidget extends Component {
 
     get isDone() {
         const state = this.activeRecord?.data?.state;
-        return state === "1_done" || state === "1_canceled";
+        return state === "03_approved" || state === "1_done" || state === "1_canceled";
     }
 
     get hasTime() {

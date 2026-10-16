@@ -859,11 +859,16 @@
             box-shadow: 0 2px 4px rgba(113, 99, 158, 0.25) !important;
         }
 
-        /* Approved (SOLID GREEN, standard border, NO white border) */
+        /* Approved (SOLID GREEN, standard border, NO white border, NO checkmark) */
         &.task_approved, &.task_state_approved {
             background-color: #10b981 !important;
             border: 1px solid #059669 !important;
             box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3) !important;
+
+            .gantt_task_progress {
+                background-color: transparent !important;
+                border-right: none !important;
+            }
         }
 
         /* Changes Requested (Amber / Orange) */

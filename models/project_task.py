@@ -254,28 +254,19 @@ class ProjectTask(models.Model):
              "The system may update or clear it; a user typed deadline is never erased.",
     )
 
-    @api.depends("parent_id", "date_assign", "parent_id.planned_date_start")
+    @api.depends("parent_id", "parent_id.planned_date_start")
     def _compute_planned_date_start(self):
-        """Default planned_date_start to parent task or date_assign if not already set."""
+        """Default planned_date_start to parent task if not already set."""
         for record in self.filtered(lambda x: not x.planned_date_start):
             if record.parent_id and record.parent_id.planned_date_start:
                 record.planned_date_start = record.parent_id.planned_date_start
-            elif record.date_assign:
-                if not record.planned_date_end or record.planned_date_end >= record.date_assign:
-                    record.planned_date_start = record.date_assign
 
-    @api.depends("parent_id", "date_end", "date_deadline", "parent_id.planned_date_end")
+    @api.depends("parent_id", "parent_id.planned_date_end")
     def _compute_planned_date_end(self):
-        """Default planned_date_end to parent task, date_end or date_deadline if not already set."""
+        """Default planned_date_end to parent task if not already set."""
         for record in self.filtered(lambda x: not x.planned_date_end):
             if record.parent_id and record.parent_id.planned_date_end:
                 record.planned_date_end = record.parent_id.planned_date_end
-            else:
-                target = record.date_end or record.date_deadline
-                if target:
-                    target_dt = target if isinstance(target, datetime) else datetime.combine(target, time(17, 0, 0))
-                    if not record.planned_date_start or record.planned_date_start <= target_dt:
-                        record.planned_date_end = target_dt
 
     @api.constrains("planned_date_start", "planned_date_end")
     def _check_planned_dates(self):
@@ -358,7 +349,7 @@ class ProjectTask(models.Model):
             UPDATE project_task c
             SET planned_date_start = p.planned_date_start,
                 planned_date_end = p.planned_date_end,
-                plan_is_auto = TRUE
+                plan_is_auto = FALSE
             FROM project_task p
             WHERE c.parent_id = p.id
               AND c.active = TRUE
@@ -368,13 +359,14 @@ class ProjectTask(models.Model):
               AND p.planned_date_end IS NOT NULL;
         """)
 
-        # Clean up stale auto-deadlines where no children overflow planned_date_end and no timer is running
+        # Clean up stale auto-deadlines where no children overflow planned_date_end, no timer ran, and task is not finished
         cr.execute("""
             UPDATE project_task
             SET date_deadline = NULL,
                 deadline_is_auto = FALSE
             WHERE deadline_is_auto = TRUE
               AND (first_timer_start IS NULL)
+              AND (state IS NULL OR state NOT IN ('03_approved', '1_done', '02_changes_requested'))
               AND planned_date_end IS NOT NULL
               AND (
                 NOT EXISTS (
@@ -405,10 +397,32 @@ class ProjectTask(models.Model):
             else:
                 task.timer_display_seconds = base_sec
 
+    def _ensure_inherited_plan(self):
+        """
+        Ensures any subtask/sub-subtask without its own planned dates inherits from its nearest
+        scheduled ancestor with plan_is_auto=False so work timer / completion compares against
+        the inherited schedule and creates a red tail on overrun.
+        """
+        for rec in self:
+            if not rec.parent_id:
+                continue
+            if not rec.planned_date_start or not rec.planned_date_end:
+                anc = rec.parent_id
+                while anc:
+                    if anc.planned_date_start and anc.planned_date_end:
+                        rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).sudo().write({
+                            "planned_date_start": anc.planned_date_start,
+                            "planned_date_end": anc.planned_date_end,
+                            "plan_is_auto": False,
+                        })
+                        break
+                    anc = anc.parent_id
+
     def action_timer_start(self):
         self.ensure_one()
-        if self.is_timer_running or self.state in ("1_done", "1_canceled"):
+        if self.is_timer_running or self.state in ("03_approved", "1_done", "1_canceled"):
             return False
+        self._ensure_inherited_plan()
         now = fields.Datetime.now()
         eff_sec = int(round((self.effective_hours or 0.0) * 3600))
         vals = {
@@ -423,24 +437,27 @@ class ProjectTask(models.Model):
         if (not self.timer_total_seconds or self.timer_total_seconds < eff_sec) and eff_sec > 0:
             vals["timer_total_seconds"] = eff_sec
 
-        # R1: no manual plan -> the plan is derived from the real work (start = first timer start).
-        # A manual plan (typed by a user) is NEVER moved by the timer.
-        manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
-        if not manual_plan:
+        # R1: no established plan -> the plan is derived from the real work (start = first timer start).
+        # An established plan (typed by a user or inherited from a scheduled parent) is NEVER moved by the timer.
+        has_established_plan = bool(self.planned_date_start and self.planned_date_end) and (
+            not self.plan_is_auto or bool(self.child_ids)
+        )
+        if not has_established_plan:
             start_f = floor_minute(vals.get("first_timer_start") or self.first_timer_start or now)
             vals["planned_date_start"] = start_f
             vals["plan_is_auto"] = True
             if self.planned_date_end and self.planned_date_end < start_f:
                 vals["planned_date_end"] = False  # stale end of an old auto plan; rewritten on Pause/Finish
 
-        if self.state in ("04_waiting_normal", "draft"):
+        if self.state in ("02_changes_requested", "04_waiting_normal", "draft"):
             vals["state"] = "01_in_progress"
-        self.with_context(gannt_auto_plan=True).write(vals)
+        self.with_context(gannt_auto_plan=True, mail_notrack=True).write(vals)
+        self.with_context(mail_notrack=True)._propagate_deadline_upward()
 
         user_name = self.env.user.name
-        time_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm:ss")
+        time_str = format_user_datetime(self.env, now, "yyyy.MM.dd -HH:mm")
         self.message_post(
-            body=Markup(f"⏱️ <b>Darbai pradėti (Timer Started):</b> {user_name} pradėjo darbą ties užduotimi [{time_str}]."),
+            body=Markup(f"{user_name} Pradėta {time_str}"),
             subtype_xmlid="mail.mt_note",
         )
         return True
@@ -459,11 +476,11 @@ class ProjectTask(models.Model):
             },
         }
 
-    def action_timer_finish(self):
+    def action_timer_finish(self, force_now=None):
         self.ensure_one()
-        if self.state == "1_done" and not self.is_timer_running:
+        if self.state in ("03_approved", "1_done") and not self.is_timer_running:
             return True
-        now = fields.Datetime.now()
+        now = force_now or fields.Datetime.now()
         user_name = self.env.user.name
 
         eff_sec = int(round((self.effective_hours or 0.0) * 3600))
@@ -484,7 +501,7 @@ class ProjectTask(models.Model):
             company = self.company_id or (emp and emp.company_id) or self.env.company
             if self.project_id and "account.analytic.line" in self.env and elapsed_hours > 0:
                 try:
-                    self.env["account.analytic.line"].create({
+                    self.env["account.analytic.line"].with_context(mail_notrack=True).create({
                         "name": _("Darbas baigtas (Finish)"),
                         "task_id": self.id,
                         "project_id": self.project_id.id,
@@ -497,87 +514,53 @@ class ProjectTask(models.Model):
                 except Exception as e:
                     _logger.warning("Could not create timesheet on finish: %s", e)
 
-            mins = diff_sec // 60
-            rem_sec = diff_sec % 60
-            dur_str = f"{mins} min. {rem_sec} sek." if mins > 0 else f"{diff_sec} sek."
-            self.message_post(
-                body=Markup(f"⏱️ <b>Laikmatis sustabdytas ir įrašytas į darbo žiniaraštį (Timesheet):</b> {elapsed_min} min. (faktiškai {dur_str})."),
-                subtype_xmlid="mail.mt_note",
-            )
-
         vals = {
             "is_timer_running": False,
             "timer_start": False,
             "timer_total_seconds": cur_total_sec,
-            "state": "1_done",
-            "progress": 1.0,  # Mark as 100% complete
+            "state": "03_approved",
         }
 
         # 2. Plan / deadline logic (R1 / R2), see _work_stop_vals
-        stop_vals, info = self._work_stop_vals(now, cur_total_sec, finished=True)
+        stop_vals, _info = self._work_stop_vals(now, cur_total_sec, finished=True)
         vals.update(stop_vals)
 
-        # Auto-move to "Atlikta / Done" Kanban stage if present
-        if self.project_id:
-            done_stage = self.env["project.task.type"].search([
-                ("project_ids", "in", self.project_id.id),
-                "|", "|",
-                ("name", "ilike", "atlik"),
-                ("name", "ilike", "done"),
-                ("fold", "=", True)
-            ], limit=1)
-            if done_stage:
-                vals["stage_id"] = done_stage.id
+        self.with_context(gannt_auto_plan=True, from_timer_finish=True, mail_notrack=True).write(vals)
+        self.with_context(mail_notrack=True)._propagate_deadline_upward()
 
-        self.with_context(gannt_auto_plan=True).write(vals)
-        self._propagate_deadline_upward()
-
-        # 3. Post finish note to Chatter
-        now_str = format_user_datetime(self.env, now, "yyyy-MM-dd HH:mm")
-        finish_msg = f"🏁 <b>Užduotis baigta (Task Finished):</b> {user_name} pažymėjo užduotį kaip atliktą (100%).<br/>"
-        if info["mode"] == "auto":
-            s_str = format_user_datetime(self.env, vals["planned_date_start"], "yyyy-MM-dd HH:mm")
-            e_str = format_user_datetime(self.env, vals["planned_date_end"], "yyyy-MM-dd HH:mm")
-            finish_msg += (
-                f"⏱️ <b>Faktinė trukmė užfiksuota:</b> nuo {s_str} iki {e_str} "
-                f"({format_duration_minutes(info['plan_minutes'])})."
-            )
-        elif info["late_min"]:
-            p_end_str = format_user_datetime(self.env, info["planned_end"], "yyyy-MM-dd HH:mm")
-            finish_msg += (
-                f"⚠️ <b>Užduotis viršijo planuotą laiką:</b> planuota pabaiga {p_end_str}, "
-                f"faktinė pabaiga {now_str}. Vėlavimas: <b>{format_duration_minutes(info['late_min'])}</b>. "
-                f"Terminas atnaujintas, laiko juostoje rodoma raudona uodega."
-            )
-            if info["extended_manual"]:
-                old_str = format_user_datetime(self.env, info["old_deadline"], "yyyy-MM-dd HH:mm")
-                finish_msg += f"<br/>Ankstesnis terminas ({old_str}) buvo pratęstas."
-        else:
-            finish_msg += f"✨ <b>Užbaigta laiku:</b> Užduotis baigta {now_str}."
-
-        self.message_post(body=Markup(finish_msg), subtype_xmlid="mail.mt_note")
+        # 3. Post single clean finish note to Chatter
+        time_str = format_user_datetime(self.env, now, "yyyy.MM.dd -HH:mm")
+        self.message_post(
+            body=Markup(f"{user_name} Baigta (Laukia patvirtinimo) {time_str}"),
+            subtype_xmlid="mail.mt_note",
+        )
         return True
 
     def _work_stop_vals(self, now, total_sec, finished):
         """
-        Single place that decides how the plan / deadline change when work stops (Pause or Finish).
+        Single place that decides how the plan / deadline change when work stops (Pause, Finish, or Status -> Approved/Done).
 
-        R1  no MANUAL plan  -> the plan is the real work: start = first timer start (minute),
-            end = start + whole minutes (always rounded UP, min 1 min). Never a red tail.
-        R2  manual plan     -> the plan is untouched. If work went past the planned end the
-            deadline = planned end + overrun minutes (rounded UP, min 1 min) flagged auto;
-            the timeline draws the red tail planned end -> deadline.
+        R1  no ESTABLISHED plan -> the plan is derived automatically:
+            start = first timer start (or task creation time create_date if timer was not used),
+            end = start + whole minutes up to now (always rounded UP, min 1 min). Never a red tail.
+            If reopened via Changes Requested and finished again later, end updates to the new current time.
+        R2  established plan (manual or inherited from a scheduled parent) -> the plan is untouched.
+            If completed past the planned end, deadline = planned end + overrun minutes (rounded UP, min 1 min)
+            flagged auto; the timeline draws the red tail planned end -> deadline.
 
         Returns (vals, info).
         """
         self.ensure_one()
+        self._ensure_inherited_plan()
         vals = {}
         info = {"mode": "auto", "late_min": 0, "plan_minutes": 0, "planned_end": self.planned_date_end,
                 "extended_manual": False, "old_deadline": self.date_deadline}
-        manual_plan = bool(self.planned_date_start and self.planned_date_end) and not self.plan_is_auto
+        has_established_plan = bool(self.planned_date_start and self.planned_date_end) and (
+            not self.plan_is_auto or bool(self.child_ids)
+        )
 
-        if not manual_plan:
-            start = self.first_timer_start or (now - timedelta(seconds=max(60, total_sec or 0)))
+        if not has_established_plan:
+            start = self.first_timer_start or self.create_date or now
             if start > now:
                 start = now
             start_f = floor_minute(start)
@@ -587,7 +570,14 @@ class ProjectTask(models.Model):
             vals["plan_is_auto"] = True
             info["plan_minutes"] = minutes
             if finished:
-                vals["allocated_hours"] = max(1, int(math.ceil((total_sec or 0) / 60.0 - 1e-9))) / 60.0
+                if total_sec and total_sec > 0:
+                    vals["allocated_hours"] = max(1, int(math.ceil(total_sec / 60.0 - 1e-9))) / 60.0
+                else:
+                    w_h = calculate_lithuanian_working_hours(
+                        utc_to_local_dt(self.env, start_f),
+                        utc_to_local_dt(self.env, vals["planned_date_end"]),
+                    )
+                    vals["allocated_hours"] = w_h if w_h > 0 else round(minutes / 60.0, 2)
             if self.deadline_is_auto and self.date_deadline:
                 vals["date_deadline"] = False
                 vals["deadline_is_auto"] = False
@@ -604,7 +594,7 @@ class ProjectTask(models.Model):
                 vals["date_deadline"] = new_dl
                 vals["deadline_is_auto"] = True
                 info["extended_manual"] = bool(cur_dl and not self.deadline_is_auto and cur_dl < new_dl)
-        elif self.deadline_is_auto and self.date_deadline:
+        elif self.deadline_is_auto and self.date_deadline and not self.child_ids:
             # Finished inside the plan: an earlier auto-written deadline is no longer true.
             vals["date_deadline"] = False
             vals["deadline_is_auto"] = False
@@ -612,51 +602,35 @@ class ProjectTask(models.Model):
 
     def action_timer_reopen(self):
         self.ensure_one()
+        now = fields.Datetime.now()
         eff_sec = int(round((self.effective_hours or 0.0) * 3600))
         cur_total_sec = max(self.timer_total_seconds or 0, eff_sec)
-        self.write({
+        self.with_context(mail_notrack=True).write({
             "state": "01_in_progress",
-            "progress": 0.0,
             "is_timer_running": False,
             "timer_start": False,
             "timer_total_seconds": cur_total_sec,
         })
         self._cascade_clear_downstream_progress()
+        time_str = format_user_datetime(self.env, now, "yyyy.MM.dd -HH:mm")
         self.message_post(
-            body=Markup(f"🔄 <b>Užduotis atnaujinta (Re-opened):</b> {self.env.user.name} atvėrė užduotį iš naujo."),
+            body=Markup(f"{self.env.user.name} Atnaujinta {time_str}"),
             subtype_xmlid="mail.mt_note",
         )
         return True
 
     def _cascade_clear_downstream_progress(self):
         """
-        When a task or parent task is not finished (reopened, waiting, in progress, etc.),
-        all dependent downstream tasks (dependent_ids) and child subtasks (child_ids)
-        must have their completion percentage cleared (progress = 0.0).
-        Downstream dependent tasks that are blocked should have their state reset to waiting (state = '04_waiting_normal').
-        Unlocked child tasks with no uncompleted dependencies should remain or be set to in_progress (state = '01_in_progress').
-        Recursively cascades throughout the downstream dependency chain.
+        When a prerequisite task is reopened / no longer finished,
+        any downstream dependent tasks (dependent_ids via finish-to-start links)
+        that were completed should be reset to waiting (state = '04_waiting_normal').
+        Never resets child subtasks (child_ids) of a parent container.
         """
         for task in self:
             for dep in task.dependent_ids:
-                if dep.state == "1_done" or (dep.progress and dep.progress > 0):
-                    dep.sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                if dep.state in ("1_done", "03_approved"):
+                    dep.with_context(mail_notrack=True).sudo().write({"state": "04_waiting_normal"})
                     dep._cascade_clear_downstream_progress()
-            for child in task.child_ids:
-                if child.state == "1_done" or (child.progress and child.progress > 0):
-                    child_is_blocked = False
-                    if child.depend_on_ids:
-                        for cdep in child.depend_on_ids:
-                            if cdep.state != "1_done" and (not cdep.progress or cdep.progress < 100.0):
-                                child_is_blocked = True
-                                break
-                    child_vals = {"progress": 0.0}
-                    if child_is_blocked:
-                        child_vals["state"] = "04_waiting_normal"
-                    else:
-                        child_vals["state"] = "01_in_progress"
-                    child.sudo().write(child_vals)
-                    child._cascade_clear_downstream_progress()
 
     def _recompute_container(self):
         """
@@ -679,11 +653,12 @@ class ProjectTask(models.Model):
             if c_s and c_e:
                 starts.append(c_s)
                 ends.append(c_e)
-                eff = c_e
-                if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c_e:
-                    eff = c.date_deadline
-                eff_ends.append(eff)
-            elif c.date_deadline and isinstance(c.date_deadline, datetime):
+                if c.state != "1_canceled":
+                    eff = c_e
+                    if c.date_deadline and isinstance(c.date_deadline, datetime) and c.date_deadline > c_e:
+                        eff = c.date_deadline
+                    eff_ends.append(eff)
+            elif c.state != "1_canceled" and c.date_deadline and isinstance(c.date_deadline, datetime):
                 eff_ends.append(c.date_deadline)
 
         vals = {}
@@ -710,20 +685,29 @@ class ProjectTask(models.Model):
 
         p_end = vals.get("planned_date_end", self.planned_date_end)
         tail_end = max(eff_ends) if eff_ends else None
+        if (
+            self.first_timer_start
+            and self.date_deadline
+            and isinstance(self.date_deadline, datetime)
+            and p_end
+            and self.date_deadline > p_end
+            and self.state != "1_canceled"
+        ):
+            tail_end = max(tail_end, self.date_deadline) if tail_end else self.date_deadline
         cur_dl = self.date_deadline
         if p_end and tail_end and tail_end > p_end:
             if not cur_dl or self.deadline_is_auto or cur_dl < tail_end:
                 if cur_dl != tail_end or not self.deadline_is_auto:
                     vals["date_deadline"] = tail_end
                     vals["deadline_is_auto"] = True
-        elif self.deadline_is_auto and cur_dl and not self.first_timer_start:
+        elif self.deadline_is_auto and cur_dl:
             # Subtasks no longer overflow the parent: the system-written tail goes away.
             vals["date_deadline"] = False
             vals["deadline_is_auto"] = False
 
         if vals:
             try:
-                self.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).sudo().write(vals)
+                self.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).sudo().write(vals)
             except Exception as e:
                 _logger.warning("Could not update container task %s: %s", self.id, e)
 
@@ -760,7 +744,7 @@ class ProjectTask(models.Model):
                         ms_vals["planned_date_end"] = max_ms_e
                 if ms_vals:
                     try:
-                        ms.sudo().write(ms_vals)
+                        ms.with_context(mail_notrack=True).sudo().write(ms_vals)
                     except Exception:
                         pass
 
@@ -808,11 +792,14 @@ class ProjectTask(models.Model):
         for vals in vals_list:
             if vals.get("parent_id") and not vals.get("planned_date_start") and not vals.get("planned_date_end"):
                 try:
-                    p = self.browse(vals["parent_id"])
-                    if p.exists() and p.planned_date_start and p.planned_date_end:
-                        vals["planned_date_start"] = p.planned_date_start
-                        vals["planned_date_end"] = p.planned_date_end
-                        vals["plan_is_auto"] = True
+                    anc = self.browse(vals["parent_id"])
+                    while anc.exists():
+                        if anc.planned_date_start and anc.planned_date_end:
+                            vals["planned_date_start"] = anc.planned_date_start
+                            vals["planned_date_end"] = anc.planned_date_end
+                            vals["plan_is_auto"] = False
+                            break
+                        anc = anc.parent_id
                 except Exception:
                     pass
 
@@ -835,6 +822,24 @@ class ProjectTask(models.Model):
         records._propagate_deadline_upward()
         return records
 
+    def _cascade_planned_dates_to_unscheduled_descendants(self, start_dt, end_dt):
+        """
+        When planned dates are set on a parent task, any active descendant (subtask / sub-subtask)
+        that does not yet have planned dates inherits them with plan_is_auto=False.
+        """
+        for rec in self:
+            for child in rec.child_ids.filtered(lambda c: c.active):
+                if not child.planned_date_start and not child.planned_date_end:
+                    child.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).sudo().write({
+                        "planned_date_start": start_dt,
+                        "planned_date_end": end_dt,
+                        "plan_is_auto": False,
+                    })
+                child._cascade_planned_dates_to_unscheduled_descendants(
+                    child.planned_date_start or start_dt,
+                    child.planned_date_end or end_dt,
+                )
+
     def write(self, vals):
         auto_ctx = bool(self.env.context.get("gannt_auto_plan"))
         if not auto_ctx:
@@ -842,15 +847,18 @@ class ProjectTask(models.Model):
 
         if "parent_id" in vals and vals.get("parent_id") and "planned_date_start" not in vals and "planned_date_end" not in vals:
             try:
-                p = self.browse(vals["parent_id"])
-                if p.exists() and p.planned_date_start and p.planned_date_end:
-                    for rec in self:
-                        if not rec.planned_date_start and not rec.planned_date_end:
-                            rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).write({
-                                "planned_date_start": p.planned_date_start,
-                                "planned_date_end": p.planned_date_end,
-                                "plan_is_auto": True,
-                            })
+                anc = self.browse(vals["parent_id"])
+                while anc.exists():
+                    if anc.planned_date_start and anc.planned_date_end:
+                        for rec in self:
+                            if not rec.planned_date_start and not rec.planned_date_end:
+                                rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).write({
+                                    "planned_date_start": anc.planned_date_start,
+                                    "planned_date_end": anc.planned_date_end,
+                                    "plan_is_auto": False,
+                                })
+                        break
+                    anc = anc.parent_id
             except Exception:
                 pass
 
@@ -883,6 +891,11 @@ class ProjectTask(models.Model):
                         pass
                 break
 
+        was_completed = {
+            rec.id: (rec.state in ("03_approved", "1_done") and not rec.is_timer_running)
+            for rec in self
+        }
+
         res = super().write(vals)
 
         # An auto-written deadline is only true while the plan ends BEFORE it. When the plan end was moved
@@ -893,23 +906,93 @@ class ProjectTask(models.Model):
                     rec.deadline_is_auto and rec.date_deadline and rec.planned_date_end
                     and rec.planned_date_end >= rec.date_deadline
                 ):
-                    rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True).write(
+                    rec.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).write(
                         {"date_deadline": False, "deadline_is_auto": False}
                     )
+                if rec.planned_date_start and rec.planned_date_end and rec.child_ids:
+                    rec._cascade_planned_dates_to_unscheduled_descendants(rec.planned_date_start, rec.planned_date_end)
+
+        # When state is changed directly to Done ('1_done') or Approved ('03_approved') via Form/Kanban/Gantt
+        # (with or without the work timer, and with or without planned dates):
+        # evaluate _work_stop_vals(now, cur_total_sec, finished=True) ONLY when transitioning from a non-completed
+        # state (or while timer is running). Confirming an already-Approved ('03_approved') task into Done ('1_done')
+        # preserves the worker's original completion deadline.
+        if (
+            "state" in vals
+            and not self.env.context.get("from_timer_finish")
+            and not self.env.context.get("skip_hierarchy_propagation")
+        ):
+            new_state = vals.get("state")
+            if new_state in ("03_approved", "1_done"):
+                now = fields.Datetime.now()
+                for rec in self:
+                    if not was_completed.get(rec.id):
+                        eff_sec = int(round((rec.effective_hours or 0.0) * 3600))
+                        cur_total_sec = max(rec.timer_total_seconds or 0, eff_sec)
+                        if rec.is_timer_running and rec.timer_start:
+                            cur_total_sec += max(0, int((now - rec.timer_start).total_seconds()))
+                        stop_vals, _ = rec._work_stop_vals(now, cur_total_sec, finished=True)
+                        if rec.is_timer_running:
+                            stop_vals.update({
+                                "is_timer_running": False,
+                                "timer_start": False,
+                                "timer_total_seconds": cur_total_sec,
+                            })
+                        if stop_vals:
+                            rec.with_context(
+                                skip_hierarchy_propagation=True,
+                                gannt_auto_plan=True,
+                                from_timer_finish=True,
+                                mail_notrack=True,
+                            ).write(stop_vals)
+                    rec.with_context(mail_notrack=True)._propagate_deadline_upward()
+            elif new_state == "1_canceled":
+                for rec in self:
+                    cancel_vals = {}
+                    if rec.is_timer_running or rec.timer_start:
+                        cancel_vals["is_timer_running"] = False
+                        cancel_vals["timer_start"] = False
+                    if rec.deadline_is_auto and rec.date_deadline:
+                        cancel_vals["date_deadline"] = False
+                        cancel_vals["deadline_is_auto"] = False
+                    if cancel_vals:
+                        rec.with_context(
+                            skip_hierarchy_propagation=True,
+                            gannt_auto_plan=True,
+                            mail_notrack=True,
+                        ).write(cancel_vals)
+                    anc = rec.parent_id
+                    while anc:
+                        if anc.state in ("03_approved", "1_done"):
+                            anc.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).sudo().write({
+                                "state": "01_in_progress",
+                            })
+                        anc = anc.parent_id
+                    rec.with_context(mail_notrack=True)._propagate_deadline_upward()
+            elif new_state in ("01_in_progress", "02_changes_requested", "04_waiting_normal"):
+                for rec in self:
+                    anc = rec.parent_id
+                    while anc:
+                        if anc.state in ("03_approved", "1_done"):
+                            anc.with_context(skip_hierarchy_propagation=True, gannt_auto_plan=True, mail_notrack=True).sudo().write({
+                                "state": "01_in_progress",
+                            })
+                        anc = anc.parent_id
+                    rec.with_context(mail_notrack=True)._propagate_deadline_upward()
 
         # Parent task and Milestone hierarchy propagation
         if ("date_deadline" in vals or "planned_date_start" in vals or "planned_date_end" in vals or "parent_id" in vals or "milestone_id" in vals) and not self.env.context.get("skip_hierarchy_propagation"):
             self._propagate_deadline_upward()
 
         # If task state/progress changed to not done, clear downstream dependent tasks
-        for rec in self:
-            is_not_done = (
-                (rec.state and rec.state != "1_done")
-                or (rec.progress is not None and rec.progress < 100.0)
-                or (rec.stage_id and not getattr(rec.stage_id, "is_closed", False) and "done" not in (rec.stage_id.name or "").lower())
-            )
-            if is_not_done:
-                rec._cascade_clear_downstream_progress()
+        if ("state" in vals and vals["state"] not in ("03_approved", "1_done")) or ("progress" in vals and vals["progress"] < 100.0):
+            for rec in self:
+                is_not_done = (
+                    (rec.state and rec.state not in ("03_approved", "1_done"))
+                    or (rec.progress is not None and rec.progress < 100.0)
+                )
+                if is_not_done:
+                    rec._cascade_clear_downstream_progress()
 
         return res
 
@@ -1060,7 +1143,8 @@ class ProjectTask(models.Model):
             if t.planned_date_start:
                 s = utc_to_local_dt(self.env, t.planned_date_start)
                 if s.hour == 0 and s.minute == 0 and not t.plan_is_auto:
-                    s = s.replace(hour=8, minute=0, second=0)
+                    if not t.planned_date_end or utc_to_local_dt(self.env, t.planned_date_end) >= s.replace(hour=8, minute=0, second=0):
+                        s = s.replace(hour=8, minute=0, second=0)
             else:
                 base_dt = utc_to_local_dt(self.env, t.date_assign or t.create_date or now)
                 s = datetime.combine(base_dt.date(), time(8, 0, 0))
@@ -1142,13 +1226,16 @@ class ProjectTask(models.Model):
                 # A parent CANNOT be 100% if bottom tasks are not finished!
                 sub_results = [get_task_metrics(s) for s in subtasks]
                 all_subs_done = all(sr["is_done"] for sr in sub_results)
+                all_subs_approved_or_done = all(sr["is_done"] or sr.get("is_approved", False) for sr in sub_results)
                 avg_sub_prog = sum(sr["progress"] for sr in sub_results) / len(sub_results)
 
                 if all_subs_done and len(subtasks) > 0:
-                    res = {"is_done": True, "progress": 1.0}
+                    res = {"is_done": True, "is_approved": False, "progress": 1.0}
+                elif all_subs_approved_or_done and len(subtasks) > 0:
+                    res = {"is_done": False, "is_approved": True, "progress": 1.0}
                 else:
                     # Not all bottom tasks are finished: cannot be 100% or done!
-                    res = {"is_done": False, "progress": min(0.99, round(avg_sub_prog, 2))}
+                    res = {"is_done": False, "is_approved": False, "progress": min(0.99, round(avg_sub_prog, 2))}
             else:
                 # Leaf task (no subtasks): its own completion state in Odoo
                 stage_name = (t.stage_id.name or "").lower() if t.stage_id else ""
@@ -1158,15 +1245,17 @@ class ProjectTask(models.Model):
                     or "done" in stage_name
                     or "completed" in stage_name
                     or "closed" in stage_name
-                    or (t.progress and t.progress >= 99.9)
                 )
+                is_approved = bool(t.state == "03_approved")
                 if is_done:
-                    res = {"is_done": True, "progress": 1.0}
+                    res = {"is_done": True, "is_approved": False, "progress": 1.0}
+                elif is_approved:
+                    res = {"is_done": False, "is_approved": True, "progress": 1.0}
                 else:
                     p = (t.progress / 100.0) if t.progress else 0.0
                     if p == 0.0 and t.allocated_hours and t.effective_hours:
                         p = min(0.99, t.effective_hours / t.allocated_hours)
-                    res = {"is_done": False, "progress": min(0.99, max(0.0, p))}
+                    res = {"is_done": False, "is_approved": False, "progress": min(0.99, max(0.0, p))}
 
             task_metrics_cache[t.id] = res
             return res
@@ -1207,13 +1296,24 @@ class ProjectTask(models.Model):
             deadline_out = own_dl
 
             has_plan = manual or bool(task_obj.parent_id) or bool(children)
-            if own_dl and own_dl > eff_end and has_plan and not task_obj.deadline_is_auto:
+            if task_obj.state == "1_canceled":
+                allow_own_dl = not task_obj.deadline_is_auto
+            else:
+                allow_own_dl = (not task_obj.deadline_is_auto) or bool(
+                    task_obj.first_timer_start
+                    or task_obj.timer_total_seconds
+                    or task_obj.effective_hours
+                    or task_obj.state in ("03_approved", "1_done", "02_changes_requested")
+                )
+            if own_dl and own_dl > eff_end and has_plan and allow_own_dl:
                 eff_end = own_dl
                 kind = "late"
-            if task_obj.is_timer_running and has_plan and now_local > eff_end:
+            if task_obj.is_timer_running and task_obj.state != "1_canceled" and has_plan and now_local > eff_end:
                 eff_end = floor_minute(now_local) + timedelta(minutes=1)
                 kind = "timer"
             for child in children:
+                if child.state == "1_canceled":
+                    continue
                 cres = compute_task_delay(child)
                 if cres["end"] > eff_end:
                     eff_end = cres["end"]
@@ -1237,6 +1337,8 @@ class ProjectTask(models.Model):
                 eff_end = own_dl
                 kind = "late"
             for ct in child_tasks:
+                if ct.state == "1_canceled":
+                    continue
                 cres = compute_task_delay(ct)
                 if c_end and cres["end"] > eff_end:
                     eff_end = cres["end"]
@@ -1261,7 +1363,7 @@ class ProjectTask(models.Model):
             if not has_dates:
                 if t.allocated_hours:
                     try:
-                        t.with_context(skip_hierarchy_propagation=True).sudo().write({"allocated_hours": 0.0})
+                        t.with_context(skip_hierarchy_propagation=True, mail_notrack=True).sudo().write({"allocated_hours": 0.0})
                     except Exception:
                         pass
                 t_alloc = 0.0
@@ -1272,7 +1374,7 @@ class ProjectTask(models.Model):
                 if w_h > 0 and (not t_alloc or abs((t_alloc or 0.0) - w_h) > 0.1):
                     t_alloc = w_h
                     try:
-                        t.with_context(skip_hierarchy_propagation=True).sudo().write({"allocated_hours": w_h})
+                        t.with_context(skip_hierarchy_propagation=True, mail_notrack=True).sudo().write({"allocated_hours": w_h})
                     except Exception:
                         pass
                 allocated_str = format_hours_label(t_alloc)
@@ -1338,26 +1440,32 @@ class ProjectTask(models.Model):
                 t_state = "locked"
                 if (t.progress and t.progress > 0) or t.state != "04_waiting_normal":
                     try:
-                        t.with_context(skip_hierarchy_propagation=True).sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
+                        t.with_context(skip_hierarchy_propagation=True, mail_notrack=True).sudo().write({"progress": 0.0, "state": "04_waiting_normal"})
                     except Exception:
                         pass
             else:
                 if t_state == "04_waiting_normal":
                     t_state = "01_in_progress"
                     try:
-                        t.with_context(skip_hierarchy_propagation=True).sudo().write({"state": "01_in_progress"})
+                        t.with_context(skip_hierarchy_propagation=True, mail_notrack=True).sudo().write({"state": "01_in_progress"})
                     except Exception:
                         pass
 
+                if subtasks and t_state in ("1_done", "03_approved") and not (t_is_done or metrics.get("is_approved")):
+                    t_state = "01_in_progress"
+
                 if t_state == "1_canceled":
                     color = "#dc3545"  # Cancelled: red
-                elif t_state == "1_done" or t_is_done:
+                elif t_is_done or (not subtasks and t_state == "1_done"):
                     color = "#16a34a"  # Done / Atlikta: green with white border & checkmark
                     t_state = "1_done"
                     t_is_done = True
                     prog = 1.0
-                elif t_state == "03_approved":
-                    color = "#10b981"  # Approved: just green
+                elif metrics.get("is_approved") or (not subtasks and t_state == "03_approved"):
+                    color = "#10b981"  # Approved: just green (no checkmark, no white border)
+                    t_state = "03_approved"
+                    t_is_done = False
+                    prog = 1.0
                 elif t_state == "02_changes_requested":
                     color = "#f59e0b"  # Changes Requested: orange
                 elif t_state == "01_in_progress":
@@ -1466,8 +1574,10 @@ class ProjectTask(models.Model):
             p_tasks = tasks.filtered(lambda t: task_belongs_to_proj(t, p.id))
             p_milestones = milestones.filtered(lambda m: m.project_id.id == p.id)
 
-            # Project Base Dates
-            task_date_pairs = [get_task_dates(t) for t in p_tasks] if p_tasks else []
+            # Project Base Dates (use scheduled tasks so an unscheduled task with no dates doesn't stretch a short project to 17:00)
+            scheduled_p_tasks = p_tasks.filtered(lambda t: t.planned_date_start or t.planned_date_end or t.date_deadline or t.parent_id)
+            span_p_tasks = scheduled_p_tasks or p_tasks
+            task_date_pairs = [get_task_dates(t) for t in span_p_tasks] if span_p_tasks else []
             if p.date_start:
                 p_start = datetime.combine(p.date_start, datetime.min.time()) if not isinstance(p.date_start, datetime) else utc_to_local_dt(self.env, p.date_start)
             elif task_date_pairs:
@@ -1488,7 +1598,7 @@ class ProjectTask(models.Model):
             if (p_end.hour == 0 and p_end.minute == 0) or (p_end.hour == 12 and p_end.minute == 0) or (p_end.hour == 23 and p_end.minute == 59):
                 p_end = p_end.replace(hour=17, minute=0, second=0)
 
-            # A PROJECT CANNOT BE SMALLER THAN ANY TASK OR MILESTONE INSIDE IT!
+            # A PROJECT CANNOT BE SMALLER THAN ANY SCHEDULED TASK OR MILESTONE INSIDE IT!
             for t_s, t_e in task_date_pairs:
                 if t_s < p_start:
                     p_start = t_s
@@ -1536,7 +1646,7 @@ class ProjectTask(models.Model):
             if p_work_hours > 0 and (not p_alloc or abs((p_alloc or 0.0) - p_work_hours) > 0.1):
                 p_alloc = p_work_hours
                 try:
-                    p.sudo().write({"allocated_hours": p_work_hours})
+                    p.with_context(mail_notrack=True).sudo().write({"allocated_hours": p_work_hours})
                 except Exception:
                     pass
 
@@ -1693,9 +1803,10 @@ class ProjectTask(models.Model):
                 if (m_end.hour == 0 and m_end.minute == 0) or (m_end.hour == 12 and m_end.minute == 0) or (m_end.hour == 23 and m_end.minute == 59):
                     m_end = m_end.replace(hour=17, minute=0, second=0)
 
-                # MILESTONE CAN NEVER BE SMALLER THAN ANY TASK INSIDE IT!
+                # MILESTONE CAN NEVER BE SMALLER THAN ANY SCHEDULED TASK INSIDE IT!
                 if m_tasks:
-                    for t in m_tasks:
+                    scheduled_m_tasks = m_tasks.filtered(lambda t: t.planned_date_start or t.planned_date_end or t.date_deadline or t.parent_id)
+                    for t in (scheduled_m_tasks or m_tasks):
                         t_s, t_e = get_task_dates(t)
                         if t_s < m_start:
                             m_start = t_s
@@ -1970,7 +2081,10 @@ class ProjectTask(models.Model):
                         p_float = min(100.0, max(0.0, float(progress) * 100.0))
                         vals["progress"] = p_float
                         if p_float >= 99.0:
-                            vals["state"] = "1_done"
+                            if task.state == "03_approved":
+                                vals["state"] = "03_approved"
+                            else:
+                                vals["state"] = "1_done"
                         elif p_float < 100.0:
                             if task.state in ("1_done", "04_waiting_normal"):
                                 vals["state"] = "01_in_progress"

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 {
-    "name": "GanntLT 2.0",
-    "summary": "GanntLT 2.0 - Interaktyvus projektų ir užduočių Gantt tvarkaraštis (Timeline)",
+    "name": "GanntLT 2.1",
+    "summary": "GanntLT 2.1 - Interaktyvus projektų ir užduočių Gantt tvarkaraštis (Timeline)",
     "description": """
-GanntLT 2.0 - Pažangus Gantt tvarkaraštis projektams ir užduotims
+GanntLT 2.1 - Pažangus Gantt tvarkaraštis projektams ir užduotims
 ================================================================
 
 Idėjos autorius ir savininkas:
@@ -16,7 +16,7 @@ Benas Jasiulis
 * Automatiškai sukuria planuojamų datų laukus (planned_date_start, planned_date_end) su integruotu daterange pasirinkimu.
 * Integruoja modernų DHTMLX Gantt (Timeline) vaizdą tiesiogiai į Odoo projektus ir užduotis.
 
-Pagrindinės funkcijos (v2.0):
+Pagrindinės funkcijos (v2.1):
 ----------------------------
 * Interaktyvus vilkimas (Drag-and-Drop) ir trukmės keitimas dešine rankenėle realiuoju laiku.
 * Pilnas veiksmų atšaukimas (Undo / Atšaukti mygtukas ir Ctrl+Z trumpinys iki 50 veiksmų).
@@ -36,7 +36,7 @@ Pagrindinės funkcijos (v2.0):
 * Greitas eksportas į PDF, didelės raiškos PNG paveikslėlį ir Excel (.xlsx).
 * Vartotojų prieigos teisės: GanntLT: Can View ir GanntLT: Can Edit.
 """,
-    "version": "2.0.0",
+    "version": "2.1.0",
     "category": "Project Management",
     "author": "Benas Jasiulis",
     "maintainer": "Benas Jasiulis",

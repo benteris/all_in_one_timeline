@@ -1941,8 +1941,9 @@ export class GanntLTAction extends Component {
         g.templates.task_text = (start, end, task) => {
             const isLocked = task.is_locked || task.state === "locked";
             const percent = isLocked ? 0 : Math.round((task.progress || 0) * 100);
-            const isDone = !isLocked && (task.is_done || percent >= 100 || task.state === "1_done");
-            const badgeClass = isDone ? "bar_prog_badge bar_prog_100" : (isLocked ? "bar_prog_badge bar_prog_locked" : "bar_prog_badge");
+            const isApproved = !isLocked && task.state === "03_approved" && !task.is_done;
+            const isDone = !isLocked && !isApproved && (task.is_done || task.state === "1_done" || (percent >= 100 && (task.is_project || task.is_milestone)));
+            const badgeClass = (isDone || isApproved) ? "bar_prog_badge bar_prog_100" : (isLocked ? "bar_prog_badge bar_prog_locked" : "bar_prog_badge");
 
             // Status icon: Locked gets a padlock, Done gets a checkmark, Changes Requested gets an exclamation triangle,
             // Cancelled gets a cross, Waiting gets a clock.
@@ -1964,26 +1965,35 @@ export class GanntLTAction extends Component {
             let delayBarHtml = "";
             if (task.has_deadline_delay) {
                 let diffMin = Number(task.delay_minutes) || 0;
-                if (!diffMin && task.deadline_end) {
-                    const dlEnd = task.deadline_end instanceof Date
-                        ? task.deadline_end
-                        : new Date(String(task.deadline_end).replace(/-/g, "/"));
+                const dlEnd = task.deadline_end
+                    ? (task.deadline_end instanceof Date ? task.deadline_end : new Date(String(task.deadline_end).replace(/-/g, "/")))
+                    : null;
+                if (!diffMin && dlEnd && !isNaN(dlEnd.getTime())) {
                     const realWorkEnd = parseWorkDateStr(task.work_end_date) || (end || task.end_date);
-                    if (!isNaN(dlEnd.getTime()) && realWorkEnd && dlEnd.getTime() > realWorkEnd.getTime()) {
+                    if (realWorkEnd && dlEnd.getTime() > realWorkEnd.getTime()) {
                         diffMin = Math.max(1, Math.ceil((dlEnd.getTime() - realWorkEnd.getTime()) / 60000));
                     }
                 }
 
                 if (diffMin > 0) {
                     const diffMs = diffMin * 60000;
+                    const pxPerDay = getZoomPxPerDay(this.state.zoomLevel, this.getTimelineVisibleWidth());
                     let widthPx = 0;
                     if (isExactTimeResolution(this.state.zoomLevel)) {
-                        const pxPerHour = (ZOOM_PX_PER_DAY[this.state.zoomLevel] || 1200) / 24.0;
-                        widthPx = Math.max(16, Math.round((diffMs / 3600000.0) * pxPerHour));
+                        const pxPerHour = pxPerDay / 24.0;
+                        widthPx = Math.max(18, Math.round((diffMs / 3600000.0) * pxPerHour));
                     } else {
-                        const diffDays = Math.max(0.2, diffMs / 86400000.0);
-                        const pxPerDay = ZOOM_PX_PER_DAY[this.state.zoomLevel] || 32;
-                        widthPx = Math.max(16, Math.round(diffDays * pxPerDay));
+                        const barEndRef = end || task.end_date;
+                        let posDiff = 0;
+                        if (dlEnd && !isNaN(dlEnd.getTime()) && barEndRef) {
+                            const barEndPx = this.safePosFromDate(barEndRef);
+                            const dlEndPx = this.safePosFromDate(dlEnd);
+                            if (barEndPx >= 0 && dlEndPx > barEndPx) {
+                                posDiff = Math.round(dlEndPx - barEndPx);
+                            }
+                        }
+                        const diffDays = Math.max(0.25, diffMs / 86400000.0);
+                        widthPx = Math.max(18, posDiff, Math.round(diffDays * pxPerDay));
                     }
 
                     const delayText = `+${formatDurationMinutes(diffMin)}`;
@@ -2100,10 +2110,10 @@ export class GanntLTAction extends Component {
             let tClass = "task_standard";
             if (task.is_locked || state === "locked") {
                 tClass += " task_locked task_state_locked";
-            } else if (state === "1_done" || task.is_done || task.progress >= 1.0) {
-                tClass += " task_done task_state_done";
-            } else if (state === "03_approved") {
+            } else if (state === "03_approved" && !task.is_done) {
                 tClass += " task_approved task_state_approved";
+            } else if (state === "1_done" || task.is_done) {
+                tClass += " task_done task_state_done";
             } else if (state === "02_changes_requested") {
                 tClass += " task_changes_requested task_state_changes_requested";
             } else if (state === "1_canceled") {
