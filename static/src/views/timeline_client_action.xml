@@ -26,7 +26,10 @@
                                     <option t-att-value="p.id" t-esc="p.name"/>
                                 </t>
                             </select>
-                            <span t-if="!state.canEdit" class="badge text-bg-secondary" title="Jūs turite tik peržiūros (Can View) teises">
+                            <span t-if="!state.canEdit and state.canTrackTime" class="badge text-bg-info text-white" title="Galite fiksuoti darbo laiką Odoo formose, bet grafiko redagavimas Gantt lange užrakintas">
+                                <i class="fa fa-clock-o me-1"/>Darbo laiko fiksavimas (Gantt tik peržiūra)
+                            </span>
+                            <span t-elif="!state.canEdit" class="badge text-bg-secondary" title="Jūs turite tik peržiūros (Can View) teises">
                                 <i class="fa fa-eye me-1"/>Tik peržiūra
                             </span>
                         </div>

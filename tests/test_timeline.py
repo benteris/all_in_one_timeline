@@ -28,6 +28,7 @@ class TestGanntLTTimeline(TransactionCase):
         super().setUpClass()
         group_user = cls.env.ref("base.group_user")
         group_project_user = cls.env.ref("project.group_project_user")
+        group_worker = cls.env.ref("GanntLT.group_gannt_lt_worker")
         project_vals = {
             "name": "Test GanntLT Unit Project",
             "privacy_visibility": "employees",
@@ -39,13 +40,13 @@ class TestGanntLTTimeline(TransactionCase):
             "name": "Worker A",
             "login": "worker_a_test",
             "email": "worker_a@example.com",
-            "group_ids": [(6, 0, [group_user.id, group_project_user.id])],
+            "group_ids": [(6, 0, [group_user.id, group_project_user.id, group_worker.id])],
         })
         cls.user_b = cls.env["res.users"].create({
             "name": "Worker B",
             "login": "worker_b_test",
             "email": "worker_b@example.com",
-            "group_ids": [(6, 0, [group_user.id, group_project_user.id])],
+            "group_ids": [(6, 0, [group_user.id, group_project_user.id, group_worker.id])],
         })
 
     def test_01_working_hours_zero_duration(self):
@@ -1220,6 +1221,99 @@ class TestGanntLTTimeline(TransactionCase):
             mo_standalone.sudo().unlink()
         except Exception:
             pass
+
+    def test_22_three_tier_permissions_view_worker_edit(self):
+        """Verify 3-tier access: Can View (readonly, no timer), Can Track Time (timer allowed, no Gantt edits), Can Edit (full access)."""
+        from odoo.exceptions import AccessError
+
+        group_view = self.env.ref("GanntLT.group_gannt_lt_user")
+        group_worker = self.env.ref("GanntLT.group_gannt_lt_worker")
+        group_manager = self.env.ref("GanntLT.group_gannt_lt_manager")
+        group_proj_user = self.env.ref("project.group_project_user")
+
+        # 1. User with Can View only
+        user_viewer = self.env["res.users"].create({
+            "name": "Test Viewer Only",
+            "login": "test_viewer_only",
+            "email": "viewer@armetlina.lt",
+            "group_ids": [(6, 0, [group_proj_user.id, group_view.id])],
+        })
+        tl_viewer = self.env["project.task"].with_user(user_viewer).get_all_in_one_timeline_data(project_id=self.project.id)
+        self.assertFalse(tl_viewer["can_edit"])
+        self.assertFalse(tl_viewer["can_track_time"])
+
+        task_test = self.env["project.task"].create({
+            "name": "Test Permission Task",
+            "project_id": self.project.id,
+            "planned_date_start": "2026-06-01 08:00:00",
+            "planned_date_end": "2026-06-05 17:00:00",
+        })
+
+        # Can View cannot start work timer
+        with self.assertRaises(AccessError):
+            task_test.with_user(user_viewer).action_timer_start()
+
+        # Can View cannot save batch schedule
+        with self.assertRaises(AccessError):
+            self.env["project.task"].with_user(user_viewer).save_timeline_batch_schedule([{
+                "id": f"task_{task_test.id}",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-06",
+            }])
+
+        # 2. User with Can Track Time (Worker)
+        user_worker = self.env["res.users"].create({
+            "name": "Test Worker Tracker",
+            "login": "test_worker_tracker",
+            "email": "worker@armetlina.lt",
+            "group_ids": [(6, 0, [group_proj_user.id, group_worker.id])],
+        })
+        tl_worker = self.env["project.task"].with_user(user_worker).get_all_in_one_timeline_data(project_id=self.project.id)
+        self.assertFalse(tl_worker["can_edit"], "Worker must NOT have can_edit in Gantt")
+        self.assertTrue(tl_worker["can_track_time"], "Worker MUST have can_track_time")
+
+        # Worker CAN start work timer
+        task_test.with_user(user_worker).action_timer_start()
+        self.assertTrue(task_test.is_timer_running)
+        self.assertEqual(task_test.active_user_id.id, user_worker.id)
+
+        # Worker CAN pause and finish timer
+        task_test.with_user(user_worker).action_timer_finish()
+        self.assertFalse(task_test.is_timer_running)
+
+        # Worker CANNOT edit Gantt schedule
+        with self.assertRaises(AccessError):
+            self.env["project.task"].with_user(user_worker).save_timeline_batch_schedule([{
+                "id": f"task_{task_test.id}",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-06",
+            }])
+
+        # 3. User with Can Edit (Manager)
+        user_manager = self.env["res.users"].create({
+            "name": "Test Gantt Manager",
+            "login": "test_gantt_manager",
+            "email": "manager@armetlina.lt",
+            "group_ids": [(6, 0, [group_proj_user.id, group_manager.id])],
+        })
+        tl_mgr = self.env["project.task"].with_user(user_manager).get_all_in_one_timeline_data(project_id=self.project.id)
+        self.assertTrue(tl_mgr["can_edit"])
+        self.assertTrue(tl_mgr["can_track_time"])
+
+        task_mgr = self.env["project.task"].create({
+            "name": "Task For Manager",
+            "project_id": self.project.id,
+            "planned_date_start": "2026-06-01 08:00:00",
+            "planned_date_end": "2026-06-05 17:00:00",
+        })
+
+        # Manager CAN save batch schedule on unapproved task
+        res = self.env["project.task"].with_user(user_manager).save_timeline_batch_schedule([{
+            "id": f"task_{task_mgr.id}",
+            "start_date": "2026-06-02",
+            "end_date": "2026-06-06",
+        }])
+        self.assertTrue(res)
 
 
 class TestGanntLTExportHttp(HttpCase):

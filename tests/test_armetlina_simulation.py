@@ -83,7 +83,7 @@ ARMETLINA_USERS = [
         "department": "Projektavimo skyrius",
         "job_title": "Elektros inžinierius-projektuotojas",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
     {
         "login": "eng_structural",
@@ -92,7 +92,7 @@ ARMETLINA_USERS = [
         "department": "Projektavimo skyrius",
         "job_title": "Konstruktorius-inžinierius (3D)",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
     {
         "login": "head_procurement",
@@ -128,7 +128,7 @@ ARMETLINA_USERS = [
         "department": "Gamybos skyrius",
         "job_title": "CNC lazerio operatorius",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
     {
         "login": "worker_assembly",
@@ -137,7 +137,7 @@ ARMETLINA_USERS = [
         "department": "Gamybos skyrius",
         "job_title": "Elektromonteris / Šynyno meistras",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
     {
         "login": "qa_tester",
@@ -146,7 +146,7 @@ ARMETLINA_USERS = [
         "department": "Gamybos skyrius",
         "job_title": "Laboratorijos bandytoja (QA)",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
     {
         "login": "elena_p",
@@ -155,7 +155,7 @@ ARMETLINA_USERS = [
         "department": "Gamybos skyrius",
         "job_title": "Elektromontuotoja",
         "role": "worker",
-        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_user"],
+        "groups": ["project.group_project_user", "GanntLT.group_gannt_lt_worker"],
     },
 ]
 
@@ -2168,7 +2168,11 @@ def execute_all_worklock_tests(env, user_map, project_data):
     # =========================================================================
     _logger.info("Tikrinamas E17: UI įrankių juostos RPC veiksmai, teisės ir Excel (.xlsx) eksportas")
     assert env["project.task"].with_user(nerijus).check_edit_rights() is True
+    assert env["project.task"].with_user(nerijus).check_timer_rights() is True
+    assert env["project.task"].with_user(mantas).check_edit_rights() is False
+    assert env["project.task"].with_user(mantas).check_timer_rights() is True
     assert env["project.task"].with_user(tomas).check_edit_rights() is False
+    assert env["project.task"].with_user(tomas).check_timer_rights() is False
 
     # Test create_new_project_from_timeline, create_timeline_milestone, create_timeline_task & delete_timeline_item
     temp_proj_id = env["project.task"].with_user(nerijus).create_new_project_from_timeline(

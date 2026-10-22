@@ -995,6 +995,7 @@ export class GanntLTAction extends Component {
             projects: [],
             undoCount: 0,
             canEdit: true,
+            canTrackTime: false,
             showWorkHoursDropdown: false,
             workingHours: this.loadWorkingHoursSchedule(),
         });
@@ -1672,15 +1673,16 @@ export class GanntLTAction extends Component {
                     let icon = "fa fa-tasks text-muted";
                     let titleAttr = "";
                     let extraIndicator = "";
-                    if (task.is_locked_by_other) {
+                    const showTimerState = Boolean(this.state.canTrackTime || this.state.canEdit);
+                    if (task.is_locked_by_other && showTimerState) {
                         icon = "fa fa-lock text-warning";
                         titleAttr = ` title="${_t("Užrakinta: vykdo ")}${escapeHtml(task.active_user_name || "")}"`;
                         extraIndicator = ` <span class="badge bg-dark text-white ms-1 py-0 px-1" style="font-size: 9px;"><i class="fa fa-lock me-1"></i>${escapeHtml(task.active_user_name || "")}</span>`;
-                    } else if (task.is_timer_running) {
+                    } else if (task.is_timer_running && showTimerState) {
                         icon = "fa fa-play text-success";
                         titleAttr = ` title="${_t("Vykdoma: ")}${escapeHtml(task.active_user_name || "")}"`;
                         extraIndicator = ` <span class="badge bg-success text-white ms-1 py-0 px-1" style="font-size: 9px;"><i class="fa fa-clock-o me-1"></i>${escapeHtml(task.active_user_name || _t("Vykdoma"))}</span>`;
-                    } else if (task.is_paused) {
+                    } else if (task.is_paused && showTimerState) {
                         icon = "fa fa-pause text-warning";
                         titleAttr = ` title="${_t("Pristabdyta")}${task.last_pause_reason ? ": " + escapeHtml(task.last_pause_reason) : ""}"`;
                         extraIndicator = ` <span class="badge bg-warning text-dark ms-1 py-0 px-1" style="font-size: 9px;"><i class="fa fa-pause me-1"></i>${_t("Pristabdyta")}</span>`;
@@ -2316,6 +2318,9 @@ export class GanntLTAction extends Component {
                 } else {
                     pClass += " project_state_in_progress";
                 }
+                if (!this.state.canEdit) {
+                    pClass += " readonly_bar";
+                }
                 return pClass + extraClass;
             }
 
@@ -2325,6 +2330,9 @@ export class GanntLTAction extends Component {
                     mClass += " milestone_done milestone_state_done";
                 } else {
                     mClass += " milestone_state_in_progress";
+                }
+                if (!this.state.canEdit) {
+                    mClass += " readonly_bar";
                 }
                 return mClass + extraClass;
             }
@@ -2369,14 +2377,19 @@ export class GanntLTAction extends Component {
             if (task.is_locked_by_other) {
                 tClass += " task_locked_by_other";
             }
-            if (task.is_timer_running) {
-                tClass += " task_timer_active";
-            }
-            if (task.is_paused) {
-                tClass += " task_timer_paused";
+            if (this.state.canTrackTime || this.state.canEdit) {
+                if (task.is_timer_running) {
+                    tClass += " task_timer_active";
+                }
+                if (task.is_paused) {
+                    tClass += " task_timer_paused";
+                }
             }
             if (task.has_been_approved) {
                 tClass += " task_has_approved_plan";
+            }
+            if (!this.state.canEdit) {
+                tClass += " readonly_bar";
             }
 
             return tClass + extraClass;
@@ -4273,6 +4286,7 @@ export class GanntLTAction extends Component {
             this.state.projects = data.projects || [];
             const canEdit = data.can_edit !== false;
             this.state.canEdit = canEdit;
+            this.state.canTrackTime = Boolean(data.can_track_time);
             this.gantt.config.readonly = !canEdit;
             this.gantt.config.drag_move = canEdit;
             this.gantt.config.drag_resize = canEdit;

@@ -60,14 +60,17 @@
                 <field name="has_been_approved" invisible="1"/>
                 <field name="approved_baseline_duration" invisible="1"/>
                 <span class="badge text-bg-warning d-inline-flex align-items-center py-2 px-3 ms-2"
+                      groups="GanntLT.group_gannt_lt_worker"
                       invisible="not is_timer_running or not active_user_id">
                     <i class="fa fa-play me-1"/> Vykdo: <field name="active_user_id" readonly="1" class="ms-1 fw-bold"/>
                 </span>
                 <span class="badge text-bg-secondary d-inline-flex align-items-center py-2 px-3 ms-2"
+                      groups="GanntLT.group_gannt_lt_worker"
                       invisible="not is_paused">
                     <i class="fa fa-pause me-1 text-warning"/> Pristabdyta: <field name="last_pause_reason" readonly="1" class="ms-1"/>
                 </span>
                 <span class="badge text-bg-info d-inline-flex align-items-center py-2 px-3 ms-2 text-white"
+                      groups="GanntLT.group_gannt_lt_worker"
                       invisible="not has_been_approved">
                     <i class="fa fa-anchor me-1"/> Užrakintas planas (<field name="approved_baseline_duration" readonly="1"/> val.)
                 </span>
@@ -76,26 +79,30 @@
                         string="Pradėti"
                         class="btn-primary"
                         icon="fa-play"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
                         string="Pristabdyti"
                         class="btn-secondary"
                         icon="fa-pause"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="not is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
                         string="Baigti"
                         class="btn-success"
                         icon="fa-check"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_reopen"
                         type="object"
                         string="Atnaujinti"
                         class="btn-secondary"
                         icon="fa-undo"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="state not in ['03_approved', '1_done', '1_canceled']"/>
-                <widget name="task_timer_widget"/>
+                <widget name="task_timer_widget" groups="GanntLT.group_gannt_lt_worker"/>
             </xpath>
 
             <!-- Ensure Sub-tasks tab is visible on all tasks and subtasks regardless of parent or depth -->
@@ -116,9 +123,9 @@
 
             <!-- Action buttons & Live Timer in Sub-tasks tab list view rows -->
             <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list" position="inside">
-                <field name="active_user_id" optional="show" widget="many2one_avatar_user" string="Vykdytojas"/>
-                <field name="is_paused" optional="hide" string="Pristabdyta"/>
-                <field name="has_been_approved" optional="hide" string="Patvirtintas planas"/>
+                <field name="active_user_id" optional="show" widget="many2one_avatar_user" string="Vykdytojas" groups="GanntLT.group_gannt_lt_worker"/>
+                <field name="is_paused" optional="hide" string="Pristabdyta" groups="GanntLT.group_gannt_lt_worker"/>
+                <field name="has_been_approved" optional="hide" string="Patvirtintas planas" groups="GanntLT.group_gannt_lt_worker"/>
                 <field name="is_timer_running" column_invisible="True"/>
                 <field name="timer_start" column_invisible="True"/>
                 <field name="first_timer_start" column_invisible="True"/>
@@ -130,26 +137,30 @@
                         title="Pradėti"
                         class="btn-success px-2"
                         icon="fa-play"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_pause"
                         type="object"
                         title="Pristabdyti"
                         class="btn-warning px-2"
                         icon="fa-pause"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="not is_timer_running or state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_finish"
                         type="object"
                         title="Baigti"
                         class="btn-success px-2"
                         icon="fa-check"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="state in ['03_approved', '1_done', '1_canceled']"/>
                 <button name="action_timer_reopen"
                         type="object"
                         title="Atnaujinti"
                         class="btn-secondary px-2"
                         icon="fa-refresh"
+                        groups="GanntLT.group_gannt_lt_worker"
                         invisible="state not in ['03_approved', '1_done']"/>
-                <widget name="task_timer_widget" string="Laikmatis"/>
+                <widget name="task_timer_widget" string="Laikmatis" groups="GanntLT.group_gannt_lt_worker"/>
             </xpath>
         </field>
     </record>

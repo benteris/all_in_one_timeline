@@ -315,12 +315,29 @@ class ProjectTask(models.Model):
     def _check_gannt_lt_edit_access(self):
         """
         Verifies that the current user has 'GanntLT: Can Edit' (group_gannt_lt_manager) or System Admin rights.
-        Users with 'Can View' (group_gannt_lt_user) can view the timeline but cannot modify it.
+        Users with 'Can View' or 'Can Track Time' can view the timeline but cannot modify it.
         """
         if self.env.is_superuser() or self.env.user.has_group("base.group_system") or self.env.user.has_group("GanntLT.group_gannt_lt_manager"):
             return True
         raise AccessError(
-            _("Jūs turite tik „GanntLT: Can View“ (peržiūros) teises. Laiko juostos redagavimas leidžiamas tik vartotojams, turintiems „Can Edit“ teises.")
+            _("Jūs turite tik peržiūros teises („Can View“ / „Can Track Time“). Laiko juostos redagavimas leidžiamas tik vartotojams, turintiems „Can Edit“ teises.")
+        )
+
+    def _check_gannt_lt_timer_access(self):
+        """
+        Verifies that the current user has 'GanntLT: Can Track Time' (group_gannt_lt_worker),
+        'GanntLT: Can Edit' (group_gannt_lt_manager), or System Admin rights.
+        Users with 'Can View' (group_gannt_lt_user) cannot start or manage the work timer.
+        """
+        if (
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("GanntLT.group_gannt_lt_worker")
+            or self.env.user.has_group("GanntLT.group_gannt_lt_manager")
+        ):
+            return True
+        raise AccessError(
+            _("Jūs turite tik „GanntLT: Can View“ (peržiūros) teises. Darbo laiko fiksavimas (laikmatis) leidžiamas tik vartotojams, turintiems „Can Track Time“ arba „Can Edit“ teises.")
         )
 
     def _auto_init(self):
@@ -485,6 +502,7 @@ class ProjectTask(models.Model):
 
     def action_timer_start(self):
         self.ensure_one()
+        self._check_gannt_lt_timer_access()
         if self.state in ("03_approved", "1_done", "1_canceled"):
             return False
 
@@ -552,6 +570,7 @@ class ProjectTask(models.Model):
 
     def action_timer_pause(self):
         self.ensure_one()
+        self._check_gannt_lt_timer_access()
         if self.active_user_id and self.active_user_id != self.env.user:
             can_manage = (
                 self.env.user.has_group("project.group_project_manager")
@@ -577,6 +596,7 @@ class ProjectTask(models.Model):
 
     def action_timer_finish(self, force_now=None):
         self.ensure_one()
+        self._check_gannt_lt_timer_access()
         if self.active_user_id and self.active_user_id != self.env.user:
             can_manage = (
                 self.env.user.has_group("project.group_project_manager")
@@ -769,6 +789,7 @@ class ProjectTask(models.Model):
 
     def action_timer_reopen(self):
         self.ensure_one()
+        self._check_gannt_lt_timer_access()
         now = fields.Datetime.now()
         eff_sec = int(round((self.effective_hours or 0.0) * 3600))
         cur_total_sec = max(self.timer_total_seconds or 0, eff_sec)
@@ -1671,6 +1692,10 @@ class ProjectTask(models.Model):
             self.env.is_superuser()
             or self.env.user.has_group("base.group_system")
             or self.env.user.has_group("GanntLT.group_gannt_lt_manager")
+        )
+        can_track_time = bool(
+            can_edit
+            or self.env.user.has_group("GanntLT.group_gannt_lt_worker")
         )
 
         # Query milestones for projects
@@ -3167,6 +3192,7 @@ class ProjectTask(models.Model):
             "links": links,
             "projects": project_list,
             "can_edit": can_edit,
+            "can_track_time": can_track_time,
         }
 
     @api.model
@@ -3461,6 +3487,17 @@ class ProjectTask(models.Model):
         return bool(
             self.env.is_superuser()
             or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("GanntLT.group_gannt_lt_manager")
+            or self.env.user.has_group("project.group_project_manager")
+        )
+
+    @api.model
+    def check_timer_rights(self):
+        """Returns whether the current user has rights to use the work timer."""
+        return bool(
+            self.env.is_superuser()
+            or self.env.user.has_group("base.group_system")
+            or self.env.user.has_group("GanntLT.group_gannt_lt_worker")
             or self.env.user.has_group("GanntLT.group_gannt_lt_manager")
             or self.env.user.has_group("project.group_project_manager")
         )
