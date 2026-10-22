@@ -625,6 +625,7 @@
     .gantt_task_line {
         height: 34px !important;
         line-height: 34px !important;
+        min-width: 3px !important;
         border-radius: 6px !important;
         border: 1px solid #5f5285 !important;
         background-color: var(--bs-primary, #71639e) !important;
@@ -909,6 +910,32 @@
             .gantt_task_progress {
                 background-color: rgba(0, 0, 0, 0.35) !important;
             }
+        }
+
+        &.task_timer_active {
+            box-shadow: 0 0 0 2px #059669, 0 3px 8px rgba(5, 150, 105, 0.4) !important;
+            border-color: #059669 !important;
+        }
+
+        &.task_timer_paused {
+            box-shadow: 0 0 0 2px #d97706, 0 3px 8px rgba(217, 119, 6, 0.4) !important;
+            border-color: #d97706 !important;
+        }
+
+        &.task_locked_by_other {
+            background: repeating-linear-gradient(
+                -45deg,
+                #1e293b,
+                #1e293b 8px,
+                #334155 8px,
+                #334155 16px
+            ) !important;
+            border: 1.5px solid #0f172a !important;
+            cursor: not-allowed !important;
+        }
+
+        &.task_has_approved_plan {
+            border-left: 4px solid #0284c7 !important;
         }
 
         /* Done / Atlikta (GREEN WITH WHITE BORDER AROUND) */
@@ -1276,3 +1303,94 @@ div.gantt_tooltip {
         font-size: 0.5rem;
     }
 }
+
+@keyframes pulseTimerDot {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.08); opacity: 0.75; }
+}
+
+.bar_status_running {
+    display: inline-flex;
+    align-items: center;
+    background-color: #059669;
+    color: #ffffff !important;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    animation: pulseTimerDot 2s infinite ease-in-out;
+}
+
+.bar_status_paused {
+    display: inline-flex;
+    align-items: center;
+    background-color: #d97706;
+    color: #ffffff !important;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 14px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.bar_status_locked_other {
+    display: inline-flex;
+    align-items: center;
+    background-color: #334155;
+    color: #f8fafc !important;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 14px;
+    border: 1px solid #475569;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.bar_anchor_approved {
+    color: #38bdf8 !important;
+    font-size: 11px;
+    margin-right: 4px;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+}
+
+/* Overdue Past Fire Badge in Tree Grid */
+.tree_fire_badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #ef4444;
+    color: #ffffff !important;
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-right: 5px;
+    font-size: 10px;
+    line-height: 12px;
+    vertical-align: middle;
+    box-shadow: 0 1px 2px rgba(239, 68, 68, 0.4);
+
+    i {
+        font-size: 10px;
+        color: #ffffff !important;
+        animation: firePulse 1.8s infinite ease-in-out;
+    }
+}
+
+@keyframes firePulse {
+    0%, 100% {
+        transform: scale(1);
+        filter: drop-shadow(0 0 1px #ffedd5);
+    }
+    50% {
+        transform: scale(1.15);
+        filter: drop-shadow(0 0 3px #f97316);
+    }
+}
+
+
+
+
+

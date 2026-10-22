@@ -54,6 +54,23 @@
                 <field name="timer_total_seconds" invisible="1"/>
                 <field name="timer_display_seconds" invisible="1"/>
                 <field name="effective_hours" invisible="1"/>
+                <field name="active_user_id" invisible="1"/>
+                <field name="is_paused" invisible="1"/>
+                <field name="last_pause_reason" invisible="1"/>
+                <field name="has_been_approved" invisible="1"/>
+                <field name="approved_baseline_duration" invisible="1"/>
+                <span class="badge text-bg-warning d-inline-flex align-items-center py-2 px-3 ms-2"
+                      invisible="not is_timer_running or not active_user_id">
+                    <i class="fa fa-play me-1"/> Vykdo: <field name="active_user_id" readonly="1" class="ms-1 fw-bold"/>
+                </span>
+                <span class="badge text-bg-secondary d-inline-flex align-items-center py-2 px-3 ms-2"
+                      invisible="not is_paused">
+                    <i class="fa fa-pause me-1 text-warning"/> Pristabdyta: <field name="last_pause_reason" readonly="1" class="ms-1"/>
+                </span>
+                <span class="badge text-bg-info d-inline-flex align-items-center py-2 px-3 ms-2 text-white"
+                      invisible="not has_been_approved">
+                    <i class="fa fa-anchor me-1"/> Užrakintas planas (<field name="approved_baseline_duration" readonly="1"/> val.)
+                </span>
                 <button name="action_timer_start"
                         type="object"
                         string="Pradėti"
@@ -99,6 +116,9 @@
 
             <!-- Action buttons & Live Timer in Sub-tasks tab list view rows -->
             <xpath expr="//page[@name='sub_tasks_page']//field[@name='child_ids']/list" position="inside">
+                <field name="active_user_id" optional="show" widget="many2one_avatar_user" string="Vykdytojas"/>
+                <field name="is_paused" optional="hide" string="Pristabdyta"/>
+                <field name="has_been_approved" optional="hide" string="Patvirtintas planas"/>
                 <field name="is_timer_running" column_invisible="True"/>
                 <field name="timer_start" column_invisible="True"/>
                 <field name="first_timer_start" column_invisible="True"/>

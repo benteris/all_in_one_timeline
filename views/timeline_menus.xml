@@ -14,4 +14,18 @@
         <field name="target">current</field>
     </record>
 
+    <!-- Top-level App Switcher Menu for GanntLT -->
+    <menuitem id="menu_gannt_lt_root"
+              name="GanntLT"
+              action="action_gannt_lt"
+              web_icon="GanntLT,static/description/icon.png"
+              sequence="25"/>
+
+    <!-- Inside Project App Menu -->
+    <menuitem id="menu_project_gannt_lt"
+              name="GanntLT Tvarkaraštis"
+              parent="project.menu_main_pm"
+              action="action_gannt_lt"
+              sequence="2"/>
+
 </odoo>

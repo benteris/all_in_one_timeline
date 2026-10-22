@@ -35,7 +35,7 @@ Pagrindinės funkcijos (v2.2):
 * Tiesioginis realaus laiko chronometras (Laikmatis) su darbo žiniaraščių (Timesheets) automatine integracija.
 * Užduočių priklausomybių ryšiai (Finish-to-Start) su rodyklėmis ir spynos 🔒 apsauga blokuotiems darbams.
 * Pilna formos navigacija dvigubu paspaudimu ir Odoo ConfirmationDialog trynimo patvirtinimui.
-* Greitas eksportas į PDF, didelės raiškos PNG paveikslėlį ir Excel (.xlsx).
+* Greitas tiesioginis projekto tvarkaraščio eksportas į profesionalų Excel (.xlsx) su hierarchiniu medžiu ir Gantt juostomis.
 * Vartotojų prieigos teisės: GanntLT: Can View ir GanntLT: Can Edit.
 """,
     "version": "2.2.0",
@@ -57,8 +57,6 @@ Pagrindinės funkcijos (v2.2):
         "web.assets_backend": [
             "GanntLT/static/src/vendor/dhtmlx_gantt/dhtmlxgantt.js",
             "GanntLT/static/src/vendor/dhtmlx_gantt/dhtmlxgantt.css",
-            "GanntLT/static/src/vendor/xlsx/xlsx.mini.min.js",
-            "GanntLT/static/src/vendor/html2canvas/html2canvas.min.js",
             "GanntLT/static/src/scss/gannt_lt.scss",
             "GanntLT/static/src/components/task_timer_widget/task_timer_widget.js",
             "GanntLT/static/src/components/task_timer_widget/task_timer_widget.xml",
@@ -68,4 +66,5 @@ Pagrindinės funkcijos (v2.2):
     },
     "application": True,
     "installable": True,
+    "uninstall_hook": "uninstall_hook",
 }
