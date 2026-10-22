@@ -938,6 +938,58 @@
             border-left: 4px solid #0284c7 !important;
         }
 
+        /* READONLY BARS: PO, MO, DELIVERY, AND GROUP CONTAINERS */
+        &.readonly_bar {
+            cursor: pointer !important;
+
+            .gantt_task_drag, .gantt_link_point {
+                display: none !important;
+            }
+        }
+
+        &.gantt_group_container {
+            background-color: #475569 !important;
+            border: 1px solid #334155 !important;
+            box-shadow: 0 2px 4px rgba(71, 85, 105, 0.25) !important;
+            font-weight: 600 !important;
+        }
+
+        /* Purchase Orders (Sky Blue) */
+        &.task_po {
+            background-color: #0284c7 !important;
+            border: 1px solid #0369a1 !important;
+            box-shadow: 0 2px 4px rgba(2, 132, 199, 0.3) !important;
+
+            &.task_po_done {
+                background-color: #16a34a !important;
+                border: 1px solid #15803d !important;
+            }
+        }
+
+        /* Manufacturing Orders (Deep Orange) */
+        &.task_mo {
+            background-color: #ea580c !important;
+            border: 1px solid #c2410c !important;
+            box-shadow: 0 2px 4px rgba(234, 88, 12, 0.3) !important;
+
+            &.task_mo_done {
+                background-color: #16a34a !important;
+                border: 1px solid #15803d !important;
+            }
+        }
+
+        /* Delivery Orders (Teal) */
+        &.task_delivery {
+            background-color: #0f766e !important;
+            border: 1px solid #115e59 !important;
+            box-shadow: 0 2px 4px rgba(15, 118, 110, 0.3) !important;
+
+            &.task_delivery_done {
+                background-color: #16a34a !important;
+                border: 1px solid #15803d !important;
+            }
+        }
+
         /* Done / Atlikta (GREEN WITH WHITE BORDER AROUND) */
         &.task_done, &.task_state_done, &.project_done, &.project_state_done, &.milestone_done, &.milestone_state_done {
             background-color: var(--bs-success, #16a34a) !important;

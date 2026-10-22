@@ -197,6 +197,64 @@ def cleanup_old_test_projects(env):
         except Exception as e:
             _logger.warning("Klaida trinant seną projektą %s: %s", p.name, e)
 
+    # Cleanup simulation POs
+    if "purchase.order" in env:
+        pos = env["purchase.order"].sudo().search([
+            "|", ("name", "in", ["P00014", "P00015", "P00016"]),
+            ("project_id", "in", old_projects.ids)
+        ])
+        for po in pos:
+            try:
+                po.button_cancel()
+                po.unlink()
+            except Exception:
+                try:
+                    po.unlink()
+                except Exception:
+                    pass
+
+    # Cleanup simulation MOs
+    if "mrp.production" in env:
+        mos = env["mrp.production"].sudo().search([
+            "|", "|", ("name", "in", ["WH/MO/00001", "WH/MO/00002", "WH/MO/00003", "WH/MO/00042", "WH/MO/00045"]),
+            ("project_id", "in", old_projects.ids),
+            ("origin", "in", ["S00042", "S00045"])
+        ])
+        for mo in mos:
+            try:
+                mo.sudo().write({"state": "cancel"})
+                mo.sudo().unlink()
+            except Exception:
+                pass
+
+    # Cleanup simulation Deliveries
+    if "stock.picking" in env:
+        picks = env["stock.picking"].sudo().search([
+            "|", ("name", "in", ["WH/OUT/00001", "WH/OUT/00002", "WH/OUT/00003"]),
+            ("project_id", "in", old_projects.ids)
+        ])
+        for pick in picks:
+            try:
+                pick.sudo().write({"state": "cancel"})
+                pick.sudo().unlink()
+            except Exception:
+                pass
+
+    # Cleanup simulation Sales Orders
+    if "sale.order" in env:
+        sos = env["sale.order"].sudo().search([
+            ("name", "in", ["S00042", "S00045"]),
+        ])
+        for so in sos:
+            try:
+                so.action_cancel()
+                so.unlink()
+            except Exception:
+                try:
+                    so.unlink()
+                except Exception:
+                    pass
+
 
 def setup_armetlina_company_and_users(env):
     """
@@ -1210,9 +1268,204 @@ def instantiate_armetlina_projects(env, user_map):
         "state": "04_waiting_normal",
     })
 
-    _logger.info("Visi 5 gamybos projektai su 4 lygių gylio WBS sėkmingai sukurti.")
+    # -------------------------------------------------------------------------
+    # Integracija: BOM, Pirkimai (PO), Gamyba (MO) ir Pristatymai (DO)
+    # -------------------------------------------------------------------------
+    _logger.info("Kuriama BOM, Pirkimo (PO), Gamybos (MO) ir Pristatymo (DO) grandinė pagal realų UAB „Armetlina“ asortimentą...")
+
+    partner_abb = env["res.partner"].sudo().search([("name", "=", "UAB ABB")], limit=1)
+    if not partner_abb:
+        partner_abb = env["res.partner"].sudo().create({"name": "UAB ABB", "supplier_rank": 1})
+    partner_eso = env["res.partner"].sudo().search([("name", "=", "AB ESO")], limit=1)
+    if not partner_eso:
+        partner_eso = env["res.partner"].sudo().create({"name": "AB ESO", "customer_rank": 1})
+    partner_tech = env["res.partner"].sudo().search([("name", "=", "UAB Techvitas")], limit=1)
+    if not partner_tech:
+        partner_tech = env["res.partner"].sudo().create({"name": "UAB Techvitas", "supplier_rank": 1})
+    partner_klaipeda = env["res.partner"].sudo().search([("name", "=", "Klaipėdos Valstybinis Jūrų Uostas")], limit=1)
+    if not partner_klaipeda:
+        partner_klaipeda = env["res.partner"].sudo().create({"name": "Klaipėdos Valstybinis Jūrų Uostas", "customer_rank": 1})
+
+    prod_trans = env["product.product"].search([("name", "ilike", "Transformatorius KAS 5/26 1000/5A")], limit=1) or env["product.product"].browse(173)
+    prod_box = env["product.product"].search([("name", "ilike", "ĮEAS-302 Korpusas")], limit=1) or env["product.product"].browse(2388)
+    prod_switch = env["product.product"].search([("name", "ilike", "Automatinis jungiklis")], limit=1)
+    pt_out = env["stock.picking.type"].search([("code", "=", "outgoing")], limit=1)
+
+    # 1. Sukurti BOM jei dar nėra
+    bom_mkt = env["mrp.bom"].sudo().search([("product_tmpl_id", "=", prod_box.product_tmpl_id.id)], limit=1)
+    if not bom_mkt:
+        bom_mkt = env["mrp.bom"].sudo().create({
+            "product_tmpl_id": prod_box.product_tmpl_id.id,
+            "product_qty": 1.0,
+            "type": "normal",
+            "bom_line_ids": [
+                (0, 0, {"product_id": prod_trans.id, "product_qty": 1.0}),
+                (0, 0, {"product_id": prod_switch.id, "product_qty": 3.0}) if prod_switch else (0, 0, {"product_id": prod_trans.id, "product_qty": 1.0}),
+            ],
+        })
+
+    # 2. Pirkimai (PO) projektui PRJ-01
+    po14 = env["purchase.order"].sudo().create({
+        "name": "P00014",
+        "partner_id": partner_abb.id,
+        "project_id": p1.id,
+        "date_order": "2026-03-01 08:00:00",
+        "date_planned": "2026-04-15 17:00:00",
+        "user_id": user_map["procurement_specialist"].id,
+        "state": "purchase",
+        "order_line": [(0, 0, {
+            "name": f"1000kVA Transformatorius: {prod_trans.name}",
+            "product_id": prod_trans.id,
+            "product_qty": 1.0,
+            "price_unit": 8500.0,
+            "date_planned": "2026-04-15 17:00:00",
+        })],
+    })
+
+    po15 = env["purchase.order"].sudo().create({
+        "name": "P00015",
+        "partner_id": partner_tech.id,
+        "project_id": p1.id,
+        "date_order": "2026-03-10 08:00:00",
+        "date_planned": "2026-04-01 17:00:00",
+        "user_id": user_map["head_procurement"].id,
+        "state": "purchase",
+        "order_line": [(0, 0, {
+            "name": f"Cu šynos ir montavimo komponentai",
+            "product_id": prod_switch.id if prod_switch else prod_trans.id,
+            "product_qty": 50.0,
+            "price_unit": 45.0,
+            "date_planned": "2026-04-01 17:00:00",
+        })],
+    })
+
+    # Pirkimas projektui PRJ-02
+    po16 = env["purchase.order"].sudo().create({
+        "name": "P00016",
+        "partner_id": partner_abb.id,
+        "project_id": p2.id,
+        "date_order": "2026-04-01 08:00:00",
+        "date_planned": "2026-05-15 17:00:00",
+        "user_id": user_map["procurement_specialist"].id,
+        "state": "purchase",
+        "order_line": [(0, 0, {
+            "name": "Valdikliai ir jutikliai AVS spintoms",
+            "product_id": prod_switch.id if prod_switch else prod_trans.id,
+            "product_qty": 10.0,
+            "price_unit": 250.0,
+            "date_planned": "2026-05-15 17:00:00",
+        })],
+    })
+
+    # 3. Gamyba (MO) projektui PRJ-01
+    mo1 = env["mrp.production"].sudo().create({
+        "name": "WH/MO/00001",
+        "product_id": prod_box.id,
+        "product_uom_id": prod_box.uom_id.id,
+        "product_qty": 1.0,
+        "bom_id": bom_mkt.id if bom_mkt else False,
+        "project_id": p1.id,
+        "user_id": user_map["worker_laser"].id,
+        "date_start": "2026-05-04 08:00:00",
+        "date_deadline": "2026-06-15 17:00:00",
+        "state": "progress",
+    })
+
+    mo2 = env["mrp.production"].sudo().create({
+        "name": "WH/MO/00002",
+        "product_id": prod_switch.id if prod_switch else prod_box.id,
+        "product_uom_id": (prod_switch or prod_box).uom_id.id,
+        "product_qty": 1.0,
+        "project_id": p1.id,
+        "user_id": user_map["worker_assembly"].id,
+        "date_start": "2026-06-16 08:00:00",
+        "date_deadline": "2026-07-31 17:00:00",
+        "state": "confirmed",
+    })
+
+    # Gamyba projektui PRJ-02
+    mo3 = env["mrp.production"].sudo().create({
+        "name": "WH/MO/00003",
+        "product_id": prod_box.id,
+        "product_uom_id": prod_box.uom_id.id,
+        "product_qty": 5.0,
+        "project_id": p2.id,
+        "user_id": user_map["worker_assembly"].id,
+        "date_start": "2026-06-01 08:00:00",
+        "date_deadline": "2026-08-15 17:00:00",
+        "state": "progress",
+    })
+
+    # 4. Pristatymai dalimis (Batch Deliveries - DO) projektui PRJ-01
+    deliv1 = env["stock.picking"].sudo().create({
+        "name": "WH/OUT/00001",
+        "picking_type_id": pt_out.id,
+        "partner_id": partner_eso.id,
+        "project_id": p1.id,
+        "location_id": pt_out.default_location_src_id.id,
+        "location_dest_id": pt_out.default_location_dest_id.id,
+        "scheduled_date": "2026-05-20 14:00:00",
+    })
+    deliv1.sudo().write({"state": "done", "date_done": "2026-05-20 16:30:00"})
+
+    deliv2 = env["stock.picking"].sudo().create({
+        "name": "WH/OUT/00002",
+        "picking_type_id": pt_out.id,
+        "partner_id": partner_eso.id,
+        "project_id": p1.id,
+        "location_id": pt_out.default_location_src_id.id,
+        "location_dest_id": pt_out.default_location_dest_id.id,
+        "scheduled_date": "2026-12-10 10:00:00",
+    })
+    deliv2.sudo().write({"state": "assigned"})
+
+    # Pristatymas projektui PRJ-02
+    deliv3 = env["stock.picking"].sudo().create({
+        "name": "WH/OUT/00003",
+        "picking_type_id": pt_out.id,
+        "partner_id": partner_klaipeda.id,
+        "project_id": p2.id,
+        "location_id": pt_out.default_location_src_id.id,
+        "location_dest_id": pt_out.default_location_dest_id.id,
+        "scheduled_date": "2026-08-25 11:00:00",
+    })
+    deliv3.sudo().write({"state": "assigned"})
+
+    # 5. Atskiri gamybos užsakymai be projekto (Standalone MOs pagal pardavimo užsakymus S00042 / S00045)
+    mo42 = env["mrp.production"].sudo().create({
+        "name": "WH/MO/00042",
+        "product_id": prod_box.id,
+        "product_uom_id": prod_box.uom_id.id,
+        "product_qty": 2.0,
+        "project_id": False,
+        "origin": "S00042",
+        "user_id": user_map["worker_assembly"].id,
+        "date_start": "2026-08-03 08:00:00",
+        "date_deadline": "2026-08-20 17:00:00",
+        "state": "progress",
+    })
+
+    mo45 = env["mrp.production"].sudo().create({
+        "name": "WH/MO/00045",
+        "product_id": prod_trans.id,
+        "product_uom_id": prod_trans.uom_id.id,
+        "product_qty": 1.0,
+        "project_id": False,
+        "origin": "S00045",
+        "user_id": user_map["worker_laser"].id,
+        "date_start": "2026-09-01 08:00:00",
+        "date_deadline": "2026-09-18 17:00:00",
+        "state": "confirmed",
+    })
+
+    _logger.info("Visi 5 gamybos projektai su 4 lygių gylio WBS, BOM, PO, MO ir DO sėkmingai sukurti.")
     return {
         "p1": p1, "p2": p2, "p3": p3, "p4": p4, "p5": p5,
+        "po14": po14, "po15": po15, "po16": po16,
+        "mo1": mo1, "mo2": mo2, "mo3": mo3,
+        "deliv1": deliv1, "deliv2": deliv2, "deliv3": deliv3,
+        "so42": False, "so45": False,
+        "mo42": mo42, "mo45": mo45,
         "t1_prod_assembly_busbar": t1_prod_assembly_busbar,
         "t1_design": t1_design,
         "t1_design_struct": t1_design_struct,
@@ -2008,7 +2261,125 @@ def execute_all_worklock_tests(env, user_map, project_data):
         "allocated_hours": orig_app_alloc,
     })
 
-    _logger.info("Visi 18 testų (E1 - E18) ir Vėlavimo logikos (Option A) SĖKMINGAI IŠLAIKYTI!")
+    # =========================================================================
+    # E19: 4-Section Project Tree Structure, Batch Deliveries, Standalone MOs & only_mo Filter
+    # =========================================================================
+    _logger.info("Tikrinamas E19: 4 lygių sekcijų struktūra (Užduotys, Pirkimai, Gamyba, Pristatymas), daliniai pristatymai ir only_mo filtras")
+    p1 = project_data["p1"]
+    p2 = project_data["p2"]
+    po14 = project_data["po14"]
+    po15 = project_data["po15"]
+    mo1 = project_data["mo1"]
+    mo2 = project_data["mo2"]
+    deliv1 = project_data["deliv1"]
+    deliv2 = project_data["deliv2"]
+    mo42 = project_data["mo42"]
+    mo45 = project_data["mo45"]
+
+    # 1. Check PRJ-01 hierarchy and strict 4-section ordering
+    p1_data = env["project.task"].get_all_in_one_timeline_data(project_id=p1.id)
+    p1_task_list = p1_data["tasks"]
+    p1_keys = [t["id"] for t in p1_task_list]
+    p1_task_map = {t["id"]: t for t in p1_task_list}
+
+    tg_key = f"tasks_group_{p1.id}"
+    pog_key = f"po_group_{p1.id}"
+    mog_key = f"mo_group_{p1.id}"
+    delg_key = f"delivery_group_{p1.id}"
+
+    assert tg_key in p1_keys, "E19 KLAIDA: PRJ-01 trūksta '📋 Projekto užduotys' sekcijos!"
+    assert pog_key in p1_keys, "E19 KLAIDA: PRJ-01 trūksta '📦 Pirkimai' sekcijos!"
+    assert mog_key in p1_keys, "E19 KLAIDA: PRJ-01 trūksta '⚙️ Gamyba' sekcijos!"
+    assert delg_key in p1_keys, "E19 KLAIDA: PRJ-01 trūksta '🚚 Pristatymas' sekcijos!"
+
+    # Verify order: Tasks Group at the top, then PO Group, then MO Group, then Delivery Group
+    idx_tg = p1_keys.index(tg_key)
+    idx_pog = p1_keys.index(pog_key)
+    idx_mog = p1_keys.index(mog_key)
+    idx_delg = p1_keys.index(delg_key)
+    assert idx_tg < idx_pog < idx_mog < idx_delg, (
+        f"E19 KLAIDA: Neteisinga sekcijų tvarka! Gauta: tg={idx_tg}, pog={idx_pog}, mog={idx_mog}, delg={idx_delg}"
+    )
+
+    # Check parentage of containers
+    assert p1_task_map[tg_key]["parent"] == f"proj_{p1.id}"
+    assert p1_task_map[pog_key]["parent"] == f"proj_{p1.id}"
+    assert p1_task_map[mog_key]["parent"] == f"proj_{p1.id}"
+    assert p1_task_map[delg_key]["parent"] == f"proj_{p1.id}"
+
+    # Check children inside PO group
+    po14_key = f"po_{po14.id}"
+    po15_key = f"po_{po15.id}"
+    assert po14_key in p1_task_map and p1_task_map[po14_key]["parent"] == pog_key
+    assert po15_key in p1_task_map and p1_task_map[po15_key]["parent"] == pog_key
+    assert p1_task_map[po14_key]["is_po"] is True and p1_task_map[po14_key]["readonly"] is True
+    assert p1_task_map[po15_key]["is_po"] is True and p1_task_map[po15_key]["readonly"] is True
+
+    # Check children inside MO group
+    mo1_key = f"mo_{mo1.id}"
+    mo2_key = f"mo_{mo2.id}"
+    assert mo1_key in p1_task_map and p1_task_map[mo1_key]["parent"] == mog_key
+    assert mo2_key in p1_task_map and p1_task_map[mo2_key]["parent"] == mog_key
+    assert p1_task_map[mo1_key]["is_mo"] is True and p1_task_map[mo1_key]["readonly"] is True
+    assert p1_task_map[mo2_key]["is_mo"] is True and p1_task_map[mo2_key]["readonly"] is True
+
+    # Check children inside Delivery group (Partial deliveries)
+    del1_key = f"delivery_{deliv1.id}"
+    del2_key = f"delivery_{deliv2.id}"
+    assert del1_key in p1_task_map and p1_task_map[del1_key]["parent"] == delg_key
+    assert del2_key in p1_task_map and p1_task_map[del2_key]["parent"] == delg_key
+    assert p1_task_map[del1_key]["is_delivery"] is True and p1_task_map[del1_key]["readonly"] is True
+    assert p1_task_map[del2_key]["is_delivery"] is True and p1_task_map[del2_key]["readonly"] is True
+    assert p1_task_map[del1_key]["is_done"] is True, "E19 KLAIDA: Ankstyvas pamatų pristatymas gegužę turi būti atliktas (is_done=True)!"
+    assert p1_task_map[del2_key]["is_done"] is False, "E19 KLAIDA: Galutinis pristatymas gruodį dar neatliktas!"
+
+    # 2. Check standalone MOs without project
+    all_tl_data = env["project.task"].get_all_in_one_timeline_data()
+    all_task_map = {t["id"]: t for t in all_tl_data["tasks"]}
+    assert "mo_standalone_group" in all_task_map, "E19 KLAIDA: Nerasta 'mo_standalone_group' bendrame vaizde!"
+    smo42_key = f"mo_{mo42.id}"
+    smo45_key = f"mo_{mo45.id}"
+    assert smo42_key in all_task_map and all_task_map[smo42_key]["parent"] == "mo_standalone_group"
+    assert smo45_key in all_task_map and all_task_map[smo45_key]["parent"] == "mo_standalone_group"
+    assert all_task_map[smo42_key]["project_name"] == "Be projekto"
+
+    # 3. Check Company-wide Manufacturing Schedule filter (only_mo=True)
+    mo_filter_data = env["project.task"].get_all_in_one_timeline_data(only_mo=True)
+    mo_filter_tasks = mo_filter_data["tasks"]
+    assert len(mo_filter_tasks) >= 5, f"E19 KLAIDA: only_mo filtras turi grąžinti visus įmonės MO (bent 5), gauta: {len(mo_filter_tasks)}"
+    for item in mo_filter_tasks:
+        assert item.get("is_mo") is True, f"E19 KLAIDA: only_mo filtre rastas ne-MO elementas: {item['id']}"
+        assert item.get("readonly") is True, f"E19 KLAIDA: MO elementas {item['id']} privalo būti readonly!"
+
+    # 4. Strict Read-Only protection in save_timeline_batch_schedule
+    # Passing PO, MO, or Delivery items into batch schedule must be cleanly ignored without altering DB or raising error
+    orig_mo_start = mo1.date_start
+    env["project.task"].with_user(nerijus).save_timeline_batch_schedule([
+        {
+            "id": mo1_key,
+            "start_date": "2026-01-01 08:00:00",
+            "end_date": "2026-01-10 17:00:00",
+        },
+        {
+            "id": po14_key,
+            "start_date": "2026-01-01 08:00:00",
+            "end_date": "2026-01-10 17:00:00",
+        },
+        {
+            "id": del1_key,
+            "start_date": "2026-01-01 08:00:00",
+            "end_date": "2026-01-10 17:00:00",
+        },
+        {
+            "id": tg_key,
+            "start_date": "2026-01-01 08:00:00",
+            "end_date": "2026-01-10 17:00:00",
+        },
+    ])
+    mo1.invalidate_recordset()
+    assert mo1.date_start == orig_mo_start, "E19 KLAIDA: Bandant per save_timeline_batch_schedule pajudinti MO, datos neturi keistis!"
+
+    _logger.info("Visi 19 testų (E1 - E19) ir Vėlavimo logikos (Option A) SĖKMINGAI IŠLAIKYTI!")
 
 
 def test_safe_uninstallation_hook(env):

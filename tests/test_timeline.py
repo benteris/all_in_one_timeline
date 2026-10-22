@@ -1087,6 +1087,140 @@ class TestGanntLTTimeline(TransactionCase):
         ms.unlink()
         proj.unlink()
 
+    def test_20_project_tasks_purchase_mrp_delivery_hierarchy(self):
+        """Verify strict 4-section project tree: Tasks Group -> PO Group -> MO Group -> Delivery Group."""
+        p_vals = {"name": "Test Hierarchy Project"}
+        if "billing_type" in self.env["project.project"]._fields:
+            p_vals["billing_type"] = "not_billable"
+        proj = self.env["project.project"].create(p_vals)
+
+        task = self.env["project.task"].create({
+            "name": "Design Task",
+            "project_id": proj.id,
+            "planned_date_start": "2026-05-04 08:00:00",
+            "planned_date_end": "2026-05-08 17:00:00",
+        })
+
+        partner = self.env["res.partner"].create({"name": "Test Supplier"})
+        po = self.env["purchase.order"].create({
+            "name": "TEST_PO_01",
+            "partner_id": partner.id,
+            "project_id": proj.id,
+            "date_order": "2026-05-01 08:00:00",
+            "date_planned": "2026-05-15 17:00:00",
+            "state": "purchase",
+        })
+
+        prod = self.env["product.product"].search([], limit=1)
+        mo = self.env["mrp.production"].create({
+            "name": "TEST_MO_01",
+            "product_id": prod.id,
+            "product_uom_id": prod.uom_id.id,
+            "product_qty": 1.0,
+            "project_id": proj.id,
+            "date_start": "2026-05-11 08:00:00",
+            "date_deadline": "2026-05-25 17:00:00",
+            "state": "progress",
+        })
+
+        pt_out = self.env["stock.picking.type"].search([("code", "=", "outgoing")], limit=1)
+        delivery = self.env["stock.picking"].create({
+            "name": "TEST_DO_01",
+            "picking_type_id": pt_out.id,
+            "partner_id": partner.id,
+            "project_id": proj.id,
+            "location_id": pt_out.default_location_src_id.id,
+            "location_dest_id": pt_out.default_location_dest_id.id,
+            "scheduled_date": "2026-05-26 10:00:00",
+        })
+
+        tl = self.env["project.task"].get_all_in_one_timeline_data(project_id=proj.id)
+        task_ids = [t["id"] for t in tl["tasks"]]
+        task_map = {t["id"]: t for t in tl["tasks"]}
+
+        tg_id = f"tasks_group_{proj.id}"
+        po_id = f"po_group_{proj.id}"
+        mo_id = f"mo_group_{proj.id}"
+        do_id = f"delivery_group_{proj.id}"
+
+        self.assertIn(tg_id, task_ids)
+        self.assertIn(po_id, task_ids)
+        self.assertIn(mo_id, task_ids)
+        self.assertIn(do_id, task_ids)
+
+        # Assert strict ordering: Tasks -> PO -> MO -> Delivery
+        self.assertLess(task_ids.index(tg_id), task_ids.index(po_id))
+        self.assertLess(task_ids.index(po_id), task_ids.index(mo_id))
+        self.assertLess(task_ids.index(mo_id), task_ids.index(do_id))
+
+        # Assert children parentage and readonly flags
+        self.assertEqual(task_map[f"task_{task.id}"]["parent"], tg_id)
+        self.assertEqual(task_map[f"po_{po.id}"]["parent"], po_id)
+        self.assertTrue(task_map[f"po_{po.id}"]["is_po"])
+        self.assertTrue(task_map[f"po_{po.id}"]["readonly"])
+
+        self.assertEqual(task_map[f"mo_{mo.id}"]["parent"], mo_id)
+        self.assertTrue(task_map[f"mo_{mo.id}"]["is_mo"])
+        self.assertTrue(task_map[f"mo_{mo.id}"]["readonly"])
+
+        self.assertEqual(task_map[f"delivery_{delivery.id}"]["parent"], do_id)
+        self.assertTrue(task_map[f"delivery_{delivery.id}"]["is_delivery"])
+        self.assertTrue(task_map[f"delivery_{delivery.id}"]["readonly"])
+
+        # Cleanup
+        try:
+            delivery.sudo().write({"state": "cancel"})
+            delivery.sudo().unlink()
+        except Exception:
+            pass
+
+        try:
+            mo.sudo().write({"state": "cancel"})
+            mo.sudo().unlink()
+        except Exception:
+            pass
+
+        try:
+            po.sudo().button_cancel()
+            po.sudo().unlink()
+        except Exception:
+            pass
+
+        task.unlink()
+        partner.unlink()
+        proj.unlink()
+
+    def test_21_only_mo_production_filter(self):
+        """Verify only_mo=True returns only manufacturing orders across the company."""
+        prod = self.env["product.product"].search([], limit=1)
+        mo_standalone = self.env["mrp.production"].create({
+            "name": "TEST_SMO_01",
+            "product_id": prod.id,
+            "product_uom_id": prod.uom_id.id,
+            "product_qty": 1.0,
+            "project_id": False,
+            "date_start": "2026-06-01 08:00:00",
+            "date_deadline": "2026-06-10 17:00:00",
+            "state": "progress",
+        })
+
+        tl = self.env["project.task"].get_all_in_one_timeline_data(only_mo=True)
+        smo_item = next((t for t in tl["tasks"] if t["id"] == f"mo_{mo_standalone.id}"), None)
+        self.assertIsNotNone(smo_item)
+        self.assertTrue(smo_item["is_mo"])
+        self.assertTrue(smo_item["readonly"])
+        self.assertFalse(smo_item["project_id"])
+
+        for t in tl["tasks"]:
+            self.assertTrue(t.get("is_mo"), f"Non-MO item found in only_mo filter: {t['id']}")
+            self.assertTrue(t.get("readonly"))
+
+        try:
+            mo_standalone.sudo().write({"state": "cancel"})
+            mo_standalone.sudo().unlink()
+        except Exception:
+            pass
+
 
 class TestGanntLTExportHttp(HttpCase):
 

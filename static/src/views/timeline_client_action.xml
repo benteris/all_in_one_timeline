@@ -21,6 +21,7 @@
                             <select class="form-select form-select-sm project_select" t-model="state.selectedProjectId" t-on-change="onProjectChange">
                                 <option value="0">Visi projektai</option>
                                 <option value="overdue">🔥 Vėluojantys projektai</option>
+                                <option value="only_mo">⚙️ Visi gamybos užsakymai (MO)</option>
                                 <t t-foreach="state.projects" t-as="p" t-key="p.id">
                                     <option t-att-value="p.id" t-esc="p.name"/>
                                 </t>

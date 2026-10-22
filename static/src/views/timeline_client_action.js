@@ -1645,6 +1645,27 @@ export class GanntLTAction extends Component {
                         const fireIcon = task.is_overdue_past ? `<span class="tree_fire_badge" title="${_t("Gairė vėluoja: pabaiga praeityje, bet darbas nebaigtas")}"><i class="fa fa-fire text-white"></i></span>` : "";
                         return `${fireIcon}<i class="${icon} me-1"></i><b>${escapeHtml(task.text)}</b>`;
                     }
+                    if (task.is_group) {
+                        return `<b>${escapeHtml(task.text)}</b>`;
+                    }
+                    if (task.is_po) {
+                        const icon = (task.is_done || task.state === "purchase" || task.state === "done")
+                            ? "fa fa-check-circle text-success"
+                            : "fa fa-cube text-info";
+                        return `<i class="${icon} me-1" title="${_t("Pirkimo užsakymas")}"></i>${escapeHtml(task.text)}`;
+                    }
+                    if (task.is_mo) {
+                        const icon = (task.is_done || task.state === "done")
+                            ? "fa fa-check-circle text-success"
+                            : "fa fa-cogs text-warning";
+                        return `<i class="${icon} me-1" title="${_t("Gamybos užsakymas")}"></i>${escapeHtml(task.text)}`;
+                    }
+                    if (task.is_delivery) {
+                        const icon = (task.is_done || task.state === "done")
+                            ? "fa fa-check-circle text-success"
+                            : "fa fa-truck text-primary";
+                        return `<i class="${icon} me-1" title="${_t("Pristatymo užsakymas")}"></i>${escapeHtml(task.text)}`;
+                    }
                     const isSubtask = task.parent && typeof task.parent === "string" && task.parent.startsWith("task_");
                     const subtaskBadge = isSubtask ? `<span class="subtask_tree_elbow text-muted me-1" title="${_t("Po-užduotis")}">↳</span>` : "";
                     const isLocked = task.is_locked || task.state === "locked";
@@ -1945,6 +1966,58 @@ export class GanntLTAction extends Component {
                         <div class="tooltip_progress_bar">
                             <div class="tooltip_progress_fill" style="width: ${percent}%;"></div>
                         </div>
+                    </div>
+                `;
+            }
+
+            if (task.is_group) {
+                return `
+                    <div class="gantt_tooltip_inner">
+                        <div class="tooltip_title">${escapeHtml(task.text)}</div>
+                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Skyriaus grupė</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
+                    </div>
+                `;
+            }
+
+            if (task.is_po) {
+                return `
+                    <div class="gantt_tooltip_inner">
+                        <div class="tooltip_title"><i class="fa fa-cube text-info me-1"></i>${escapeHtml(task.text)}</div>
+                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Pirkimo užsakymas (PO)</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? '<span class="text-success fw-bold">Gauta / Patvirtinta</span>' : '<span class="text-info fw-bold">Užsakyta / Vykdoma</span>'}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Užsakymo data:</span> <span class="tooltip_val">${startStr}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Pristatymo data:</span> <span class="tooltip_val">${endStr}</span></div>
+                        ${task.assignees ? `<div class="tooltip_row"><span class="tooltip_label">Pirkėjas:</span> <span class="tooltip_val">${escapeHtml(task.assignees)}</span></div>` : ""}
+                    </div>
+                `;
+            }
+
+            if (task.is_mo) {
+                return `
+                    <div class="gantt_tooltip_inner">
+                        <div class="tooltip_title"><i class="fa fa-cogs text-warning me-1"></i>${escapeHtml(task.text)}</div>
+                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Gamybos užsakymas (MO)</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? '<span class="text-success fw-bold">Pagaminta (Done)</span>' : '<span class="text-warning fw-bold">Gamyboje (In Progress)</span>'}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Gamybos pradžia:</span> <span class="tooltip_val">${startStr}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Gamybos pabaiga:</span> <span class="tooltip_val">${endStr}</span></div>
+                        ${task.assignees ? `<div class="tooltip_row"><span class="tooltip_label">Atsakingas:</span> <span class="tooltip_val">${escapeHtml(task.assignees)}</span></div>` : ""}
+                    </div>
+                `;
+            }
+
+            if (task.is_delivery) {
+                return `
+                    <div class="gantt_tooltip_inner">
+                        <div class="tooltip_title"><i class="fa fa-truck text-primary me-1"></i>${escapeHtml(task.text)}</div>
+                        <div class="tooltip_row"><span class="tooltip_label">Tipas:</span> <span class="tooltip_val">Pristatymas klientui (DO)</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Būsena:</span> <span class="tooltip_val">${task.is_done ? '<span class="text-success fw-bold">Pristatyta (Done)</span>' : '<span class="text-primary fw-bold">Suplanuota</span>'}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Projektas:</span> <span class="tooltip_val">${task.project_name || "-"}</span></div>
+                        <div class="tooltip_row"><span class="tooltip_label">Planuota data:</span> <span class="tooltip_val">${startStr}</span></div>
                     </div>
                 `;
             }
@@ -2256,6 +2329,25 @@ export class GanntLTAction extends Component {
                 return mClass + extraClass;
             }
 
+            if (task.is_group) {
+                return "gantt_group_container readonly_bar" + extraClass;
+            }
+
+            if (task.is_po) {
+                const poDone = task.is_done || state === "purchase" || state === "done";
+                return "task_po readonly_bar" + (poDone ? " task_po_done" : "") + extraClass;
+            }
+
+            if (task.is_mo) {
+                const moDone = task.is_done || state === "done";
+                return "task_mo readonly_bar" + (moDone ? " task_mo_done" : "") + extraClass;
+            }
+
+            if (task.is_delivery) {
+                const delDone = task.is_done || state === "done";
+                return "task_delivery readonly_bar" + (delDone ? " task_delivery_done" : "") + extraClass;
+            }
+
             // Task / Subtask
             let tClass = "task_standard";
             if (task.is_locked || state === "locked") {
@@ -2500,6 +2592,11 @@ export class GanntLTAction extends Component {
             this.hideTooltip();
             const task = g.getTask(id);
             if (!task) return true;
+
+            // Strict Read-Only Protection for POs, MOs, Deliveries, and group containers
+            if (task.readonly || task.is_po || task.is_mo || task.is_delivery || task.is_group || task.is_tasks_group || task.is_po_group || task.is_mo_group || task.is_delivery_group || task.is_mo_standalone_group) {
+                return false;
+            }
 
             // Exclusive Worker Concurrency Lock: blocked if running/paused by someone else
             if (task.is_locked_by_other) {
@@ -3479,10 +3576,25 @@ export class GanntLTAction extends Component {
         }));
 
 
-        // Double-click to open Odoo Task Form Dialog, Milestone Dialog, or Project Dialog
+        // Double-click to open Odoo Task Form Dialog, Milestone Dialog, Project Dialog, PO, MO, or Delivery Dialog
         this.eventIds.push(g.attachEvent("onTaskDblClick", (id) => {
             const task = g.getTask(id);
             if (!task) return false;
+            if (task.is_group) {
+                return false;
+            }
+            if (task.is_po) {
+                this.openPoFormDialog(task.odoo_id);
+                return false;
+            }
+            if (task.is_mo) {
+                this.openMoFormDialog(task.odoo_id);
+                return false;
+            }
+            if (task.is_delivery) {
+                this.openDeliveryFormDialog(task.odoo_id);
+                return false;
+            }
             if (task.is_project) {
                 this.openProjectFormDialog(task.odoo_id);
                 return false;
@@ -3504,6 +3616,11 @@ export class GanntLTAction extends Component {
                 const s = String(link.source || "");
                 const t = String(link.target || "");
                 if (!s.startsWith("task_") || !t.startsWith("task_") || s === t) {
+                    return false;
+                }
+                const sourceTask = g.getTask(link.source);
+                const targetTask = g.getTask(link.target);
+                if (!sourceTask || !targetTask || sourceTask.is_po || sourceTask.is_mo || sourceTask.is_delivery || sourceTask.is_group || targetTask.is_po || targetTask.is_mo || targetTask.is_delivery || targetTask.is_group) {
                     return false;
                 }
             }
@@ -4144,9 +4261,11 @@ export class GanntLTAction extends Component {
         try {
             const domain = customDomain || this.props.domain || [];
             const isOverdue = (this.state.selectedProjectId === "overdue");
+            const isOnlyMo = (this.state.selectedProjectId === "only_mo");
             const data = await this.orm.call("project.task", "get_all_in_one_timeline_data", [], {
-                project_id: isOverdue ? "overdue" : (this.state.selectedProjectId || 0),
+                project_id: isOverdue ? "overdue" : (isOnlyMo ? "only_mo" : (this.state.selectedProjectId || 0)),
                 only_overdue: isOverdue,
+                only_mo: isOnlyMo,
                 domain: domain,
                 model_name: this.props.resModel || "project.task",
             });
@@ -4304,6 +4423,48 @@ export class GanntLTAction extends Component {
             type: "ir.actions.act_window",
             res_model: "project.task",
             res_id: taskId,
+            views: [[false, "form"]],
+            target: "current",
+        });
+    }
+
+    /**
+     * Open standard Odoo Purchase Order Form (Full view)
+     */
+    openPoFormDialog(poId) {
+        this.saveViewState(true);
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "purchase.order",
+            res_id: poId,
+            views: [[false, "form"]],
+            target: "current",
+        });
+    }
+
+    /**
+     * Open standard Odoo Manufacturing Order Form (Full view)
+     */
+    openMoFormDialog(moId) {
+        this.saveViewState(true);
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "mrp.production",
+            res_id: moId,
+            views: [[false, "form"]],
+            target: "current",
+        });
+    }
+
+    /**
+     * Open standard Odoo Delivery / Stock Picking Form (Full view)
+     */
+    openDeliveryFormDialog(deliveryId) {
+        this.saveViewState(true);
+        this.actionService.doAction({
+            type: "ir.actions.act_window",
+            res_model: "stock.picking",
+            res_id: deliveryId,
             views: [[false, "form"]],
             target: "current",
         });
@@ -4727,10 +4888,10 @@ export class GanntLTAction extends Component {
      */
     async onProjectChange(e) {
         const val = e.target.value;
-        this.state.selectedProjectId = (val === "overdue") ? "overdue" : (parseInt(val) || 0);
+        this.state.selectedProjectId = (val === "overdue" || val === "only_mo") ? val : (parseInt(val) || 0);
         this._projectChanged = true;
         await this.loadTimelineData();
-        if (val === "overdue") {
+        if (val === "overdue" || val === "only_mo") {
             this.navigateToday();
         }
     }
